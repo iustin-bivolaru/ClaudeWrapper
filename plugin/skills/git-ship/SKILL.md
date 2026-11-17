@@ -28,7 +28,7 @@ git commit -m "<type>(<scope>): <imperative summary, ≤ 72 chars>" -m "<why, an
 ```
 
 ### Conventional Commits (enforced by a hook)
-The header is `<type>(<scope>)!: <description>`. The guard refuses any commit or PR title that doesn't match.
+The header is `<type>(<scope>)!: <description>`. The guard refuses any commit message that doesn't match. PR titles are plain sentences instead (see `writing-prs`).
 
 | Type | Use for |
 |---|---|
@@ -49,7 +49,7 @@ The header is `<type>(<scope>)!: <description>`. The guard refuses any commit or
 - **Description**: imperative mood, lowercase start, no trailing period, ≤ 72 characters for the whole header (hard limit 100).
 - **Body** (a second `-m`): explain *why*, not what the diff already shows. Reference tickets as `Refs: PAY-123`.
 - Always pass the message with `-m`. An editor or `-F file` can't be checked, so the hook refuses them.
-- The PR title follows the same format, because it usually becomes the squash-merge commit.
+- When squash-merging, make the squash commit title a Conventional header too. GitHub suggests the plain PR title.
 
 Examples:
 ```bash

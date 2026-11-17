@@ -1,4 +1,4 @@
-"""Conventional Commits validation for commit messages and PR titles.
+"""Conventional Commits validation for commit messages.
 
 The format is ``<type>(<optional scope>)<optional !>: <description>``, for example
 ``feat(payments): add SEPA instant transfers`` or ``fix!: drop the legacy IBAN format``.
@@ -24,10 +24,10 @@ HEADER_PATTERN: Final = re.compile(
 
 
 def header_problems(header: str) -> list[str]:
-    """List every way a commit header or PR title breaks the Conventional Commits format.
+    """List every way a commit header breaks the Conventional Commits format.
 
     Args:
-        header: The first line of a commit message, or a PR title.
+        header: The first line of a commit message.
 
     Returns:
         Human-readable problems; empty when the header is valid.
@@ -108,24 +108,3 @@ def commit_header(command: str) -> str | None:
         if message is not None:
             return _first_heredoc_line(message).splitlines()[0] if message.strip() else ""
     return ""
-
-
-def pr_title(command: str) -> str | None:
-    """Find the ``--title`` of a ``gh pr create`` / ``gh pr edit`` command.
-
-    Args:
-        command: Raw shell command line.
-
-    Returns:
-        The title, or None when the command sets none.
-    """
-    try:
-        words = shlex.split(command, posix=True)
-    except ValueError:
-        words = command.split()
-    for index, word in enumerate(words):
-        if word in {"--title", "-t"} and index + 1 < len(words):
-            return words[index + 1]
-        if word.startswith("--title="):
-            return word.split("=", 1)[1]
-    return None

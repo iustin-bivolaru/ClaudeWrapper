@@ -19,7 +19,7 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).parent))
 
 from _common import ALLOW, block, is_secret_path, project_dir, read_payload  # noqa: E402
-from conventional_commits import commit_header, header_problems, pr_title  # noqa: E402
+from conventional_commits import commit_header, header_problems  # noqa: E402
 
 PROTECTED_BRANCHES = frozenset({"main", "master", "develop", "release", "production"})
 
@@ -158,7 +158,7 @@ def check_git_policy(command: str, cwd: Path) -> None:
 
 
 def check_conventional_commit(command: str) -> None:
-    """Require Conventional Commits headers for commits and PR titles.
+    """Require Conventional Commits headers for commit messages (PR titles are plain sentences).
 
     Args:
         command: Raw shell command line.
@@ -172,12 +172,6 @@ def check_conventional_commit(command: str) -> None:
             problems = header_problems(header)
             if problems:
                 block("commit message isn't a Conventional Commit: " + "; ".join(problems) + f". ({example})")
-    if re.search(r"\bgh\s+pr\s+(create|edit)\b", command):
-        title = pr_title(command)
-        if title:
-            problems = header_problems(title)
-            if problems:
-                block("PR title isn't a Conventional Commit header: " + "; ".join(problems) + ".")
 
 
 def check_bash(command: str, cwd: Path) -> None:

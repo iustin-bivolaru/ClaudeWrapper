@@ -1,6 +1,6 @@
 ---
 name: writing-prs
-description: How to write a pull request - Conventional Commits title, a body built from facts gathered with git (what, why, how it was verified, risk and rollout, config and migrations, breaking changes, commits), banking-grade rules (no client data, secrets or Claude attribution), and keeping the description current as the branch changes. Use whenever opening a PR, editing a PR title or description, or after pushing commits that change what an open PR does.
+description: How to write a pull request - a plain, readable title (never a copied commit message), a body built from facts gathered with git (what, why, how it was verified, risk and rollout, config and migrations, breaking changes, commits), banking-grade rules (no client data, secrets or Claude attribution), and keeping the description current as the branch changes. Use whenever opening a PR, editing a PR title or description, or after pushing commits that change what an open PR does.
 ---
 
 # Writing a pull request
@@ -28,11 +28,23 @@ Also scan the diff for:
 
 Use only test commands and results that actually ran in this session, such as a worker's report, the pre-review gate, or the commit gate. Never claim a check you didn't run.
 
-## 2. Title
+## 2. Title: a plain sentence, not a commit message
 
-- Use the Conventional Commits header (enforced by the guard): `<type>(<scope>)!: <description>`, lowercase, imperative, no trailing period, ≤ 72 characters.
-- It describes the **whole PR**, because it usually becomes the squash-merge commit. Use the type of the most significant change. A PR with a `feat` and some `fix` commits is a `feat`.
-- Add `!` if any commit is breaking.
+The title is what a reviewer sees in their PR list. Write it fresh for the **whole PR**. Never copy a commit message, and never use a `type(scope):` prefix (that format is for commits only).
+
+- Write a short imperative sentence about the **outcome**, starting with a capital letter and without a trailing period. Aim for ≤ 60 characters, 72 at most.
+- Name the domain thing that changes, not the mechanics:
+  - ✅ `Add SEPA instant payments to transfers`
+  - ✅ `Fix rounding in long account statements`
+  - ✅ `Require approval for transfers above the daily limit`
+  - ❌ `feat(transfers): add sepa instant` (a commit header)
+  - ❌ `Update transfer_service.py and models` (files, not an outcome)
+  - ❌ `Improvements` / `WIP` / `Fixes` (says nothing)
+- With several changes, name the main one. The rest goes in the body.
+- Flag breaking changes in the title: `Remove v1 statements endpoint (breaking)`.
+- Add a ticket id at the end when the user gave one: `Add SEPA instant payments (PAY-412)`.
+
+**Squash-merging:** GitHub suggests the PR title as the squash commit message, and a plain title would break the Conventional Commits history on `main`. When squash-merging, set the commit title to a Conventional header (`feat(transfers): add SEPA instant payments`), or use a merge commit or rebase so the individual Conventional commits are kept.
 
 ## 3. Body template
 
@@ -77,7 +89,7 @@ Keep only the sections that apply. Delete the others rather than writing "N/A".
 - **No Claude attribution.** No "Generated with Claude Code" and no co-author lines. A hook blocks them.
 - **Ship it with `gh`.** Write the body to a temp file and pass it with `--body-file`, so markdown and backticks survive the shell:
   ```bash
-  gh pr create --base "$base" --head "$(git branch --show-current)" --title "<header>" --body-file "${TMPDIR:-/tmp}/pr-body.md"
+  gh pr create --base "$base" --head "$(git branch --show-current)" --title "<plain title>" --body-file "${TMPDIR:-/tmp}/pr-body.md"
   ```
   Use `--draft` only when the user asks or the work is knowingly unfinished. Never use `--fill`, because the commit list is not a description.
 
@@ -87,7 +99,7 @@ When you push commits that change what the PR does, update the description in th
 
 ```bash
 gh pr view --json body -q .body > "${TMPDIR:-/tmp}/pr-body.md"   # edit only the sections that changed
-gh pr edit --title "<header>" --body-file "${TMPDIR:-/tmp}/pr-body.md"
+gh pr edit --title "<plain title>" --body-file "${TMPDIR:-/tmp}/pr-body.md"
 ```
 
 Update the commit list, the test counts and results, and the risk and config sections. Remove claims that are no longer true. Don't append a changelog of review rounds; the description describes the PR as it is now.
