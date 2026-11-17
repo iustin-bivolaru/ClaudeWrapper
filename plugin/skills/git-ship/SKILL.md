@@ -26,6 +26,38 @@ Then commit in a **separate** command (the commit hook runs the secret scan, for
 ```bash
 git commit -m "<type>(<scope>): <imperative summary, ≤ 72 chars>" -m "<why, and anything notable>"
 ```
+
+### Conventional Commits (enforced by a hook)
+The header is `<type>(<scope>)!: <description>`. The guard refuses any commit or PR title that doesn't match.
+
+| Type | Use for |
+|---|---|
+| `feat` | a new capability for users or callers |
+| `fix` | a bug fix |
+| `refactor` | a code change that neither fixes a bug nor adds a feature |
+| `perf` | a performance improvement |
+| `test` | adding or fixing tests only |
+| `docs` | documentation only |
+| `build` | the build system, dependencies, packaging |
+| `ci` | CI configuration |
+| `chore` | maintenance that touches no `src` or test code |
+| `style` | formatting only (rare: the formatter runs on every edit) |
+| `revert` | reverts an earlier commit (name it in the body) |
+
+- **Scope** is optional, lowercase, and names the area: `feat(payments): …`, `fix(fx-rates): …`, `chore(deps): …`.
+- **Breaking change**: put `!` before the colon (`feat(api)!: drop the v1 statements endpoint`) and add a `BREAKING CHANGE: <what callers must do>` paragraph to the body.
+- **Description**: imperative mood, lowercase start, no trailing period, ≤ 72 characters for the whole header (hard limit 100).
+- **Body** (a second `-m`): explain *why*, not what the diff already shows. Reference tickets as `Refs: PAY-123`.
+- Always pass the message with `-m`. An editor or `-F file` can't be checked, so the hook refuses them.
+- The PR title follows the same format, because it usually becomes the squash-merge commit.
+
+Examples:
+```bash
+git commit -m "feat(transfers): add SEPA instant payments" -m "Clients asked for same-second settlement. Refs: PAY-412"
+git commit -m "fix(statements): use Decimal for running balances" -m "Float rounding drifted by a cent on long statements."
+git commit -m "chore(deps): bump httpx to 0.28"
+```
+
 - One logical change per commit; split if the diff mixes concerns.
 - No client names, IBANs, account ids or secrets in messages.
 - **No Claude attribution**: no `Co-Authored-By: Claude …` trailer, no "Generated with Claude Code" line. The user is the only author (a hook blocks it).

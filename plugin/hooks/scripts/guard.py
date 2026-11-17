@@ -19,6 +19,7 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).parent))
 
 from _common import ALLOW, block, is_secret_path, project_dir, read_payload  # noqa: E402
+from conventional_commits import commit_header, header_problems, pr_title  # noqa: E402
 
 PROTECTED_BRANCHES = frozenset({"main", "master", "develop", "release", "production"})
 
@@ -156,6 +157,29 @@ def check_git_policy(command: str, cwd: Path) -> None:
             )
 
 
+def check_conventional_commit(command: str) -> None:
+    """Require Conventional Commits headers for commits and PR titles.
+
+    Args:
+        command: Raw shell command line.
+    """
+    example = "e.g. git commit -m 'feat(payments): add SEPA instant transfers' -m '<why>'"
+    if re.search(r"\bgit\s+commit\b", command):
+        header = commit_header(command)
+        if header == "":
+            block(f"pass the commit message with -m so it can be checked against Conventional Commits ({example}).")
+        if header:
+            problems = header_problems(header)
+            if problems:
+                block("commit message isn't a Conventional Commit: " + "; ".join(problems) + f". ({example})")
+    if re.search(r"\bgh\s+pr\s+(create|edit)\b", command):
+        title = pr_title(command)
+        if title:
+            problems = header_problems(title)
+            if problems:
+                block("PR title isn't a Conventional Commit header: " + "; ".join(problems) + ".")
+
+
 def check_bash(command: str, cwd: Path) -> None:
     """Run all shell-command checks.
 
@@ -178,6 +202,7 @@ def check_bash(command: str, cwd: Path) -> None:
         if pattern.search(command):
             block(f"{why}. Ask the user to run it themselves if it is really needed.")
     check_git_policy(command, cwd)
+    check_conventional_commit(command)
 
 
 def main() -> int:

@@ -137,7 +137,8 @@ def test_commit_on_main_blocked(repo):
 
 def test_commit_after_branch_switch_allowed(repo):
     git(repo, "switch", "-qc", "feat/x")
-    assert run_hook("guard.py", tool("Bash", cwd=repo, command="git commit -m x")).returncode == 0
+    result = run_hook("guard.py", tool("Bash", cwd=repo, command="git commit -m 'feat: add x'"))
+    assert result.returncode == 0, result.stderr
 
 
 @pytest.mark.parametrize(
@@ -453,3 +454,54 @@ def test_default_worker_cap_is_three(tmp_path):
     result = run_hook("agent_policy.py", pre, "pre", env=env)
     assert result.returncode == 2
     assert "limit 3" in result.stderr
+
+
+# --- conventional commits ---------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "git commit -m 'feat: add compound interest'",
+        "git commit -m 'fix(payments): reject negative amounts' -m 'Amounts below zero were booked as credits.'",
+        "git commit -m 'feat(api)!: drop the v1 statements endpoint'",
+        "git commit --message='docs: describe the outbox retry policy'",
+        "git commit -m 'chore(deps): bump httpx to 0.28'",
+        "git commit -m 'refactor: rename IBAN validator'",
+        "git commit --amend --no-edit",
+        """git commit -m "$(cat <<'EOF'\nfeat: add fx rates\n\nWhy it matters.\nEOF\n)\"""",
+    ],
+)
+def test_conventional_commit_allowed(repo, command):
+    git(repo, "switch", "-qc", "feat/x")
+    result = run_hook("guard.py", tool("Bash", cwd=repo, command=command))
+    assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize(
+    ("command", "reason"),
+    [
+        ("git commit -m 'add compound interest'", "isn't '<type>"),
+        ("git commit -m 'feature: add compound interest'", "must be one of"),
+        ("git commit -m 'Feat: add compound interest'", "isn't '<type>"),
+        ("git commit -m 'feat:add compound interest'", "isn't '<type>"),
+        ("git commit -m 'feat(Payments): add transfers'", "isn't '<type>"),
+        ("git commit -m 'fix: reject negative amounts.'", "period"),
+        ("git commit -m 'fix: Rejected negative amounts'", "lowercase"),
+        ("git commit -m 'feat: " + "x" * 120 + "'", "characters"),
+        ("git commit", "pass the commit message with -m"),
+        ("git commit -F message.txt", "pass the commit message with -m"),
+        ("gh pr create --title 'Add compound interest' --body x", "PR title"),
+    ],
+)
+def test_non_conventional_commit_blocked(repo, command, reason):
+    git(repo, "switch", "-qc", "feat/x")
+    result = run_hook("guard.py", tool("Bash", cwd=repo, command=command))
+    assert result.returncode == 2, command
+    assert reason in result.stderr, result.stderr
+
+
+def test_conventional_pr_title_allowed(repo):
+    git(repo, "switch", "-qc", "feat/x")
+    command = "gh pr create --base main --title 'feat(fx): add daily rates import' --body 'What/why'"
+    assert run_hook("guard.py", tool("Bash", cwd=repo, command=command)).returncode == 0

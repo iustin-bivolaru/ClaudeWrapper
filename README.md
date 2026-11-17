@@ -104,7 +104,8 @@ you: task ─▶ orchestrator: size it (XS/S/M/L), plan, worker map
 - No commits on `main`/`master`/`develop`/`release`/`production`. The agent creates `feat/…`, `fix/…` and similar branches.
 - No pushes to protected branches, no `--force` (only `--force-with-lease` on your own branch), no `--no-verify`.
 - Files are staged and committed in separate commands, so the gate checks exactly what gets committed.
-- The orchestrator commits with conventional messages, pushes with a standalone `git push origin HEAD`, and opens the PR with `gh pr create`.
+- **Conventional Commits, enforced.** Commit headers and PR titles must look like `<type>(<scope>)!: <description>`. Allowed types: `feat`, `fix`, `refactor`, `perf`, `test`, `docs`, `build`, `ci`, `chore`, `style`, `revert`. The description is lowercase with no trailing period, and the header is ≤ 100 characters (72 recommended). Messages must be passed with `-m`, so editor and `-F` commits are refused.
+- The orchestrator commits, pushes with a standalone `git push origin HEAD`, and opens the PR with `gh pr create`.
 - **No Claude attribution.** The `attribution` settings are empty, and the guard blocks `Co-Authored-By: Claude` and "Generated with Claude Code" in commits and PRs. You are the only author.
 
 ## Quality gate
