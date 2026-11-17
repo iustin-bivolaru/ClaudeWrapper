@@ -36,7 +36,9 @@
       "Bash(gh pr create *)",
       "Bash(gh pr list *)",
       "Bash(gh pr checks *)",
-      "Bash(gh repo view *)"
+      "Bash(gh repo view *)",
+      "Bash(gh repo create *)",
+      "Bash(git remote add *)"
     ],
     "ask": [
       "WebFetch"

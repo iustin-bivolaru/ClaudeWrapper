@@ -61,6 +61,10 @@ DESTRUCTIVE_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = tuple(
         (r"\bgit\s+(filter-branch|filter-repo)\b", "history rewriting"),
         (r"\bgit\s+push\b.*\s--(mirror|all|delete)\b", "bulk/deleting push"),
         (
+            r"\bgh\s+repo\s+(create|edit)\b.*(\s--public\b|\s--visibility[=\s]+public\b)",
+            "public repositories are not allowed for client code (use --private or --internal)",
+        ),
+        (
             r"(?is)\b(git\s+commit|gh\s+pr\s+(create|edit)|git\s+notes)\b.*"
             r"(co-authored-by:\s*claude|noreply@anthropic\.com|generated\s+with\s+\[?claude)",
             "Claude attribution is not allowed in commits or PRs; the user is the sole author",
