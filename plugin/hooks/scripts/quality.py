@@ -39,6 +39,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from _common import ALLOW, BLOCK, block, is_secret_path, project_dir, read_payload, state_dir  # noqa: E402
 from agent_policy import _slot_name, slots_locked  # noqa: E402
 from agent_policy import on_stop as release_worker_slot  # noqa: E402
+from claude_md import count_lines, is_claude_md, max_lines  # noqa: E402
 from naming import find_short_names  # noqa: E402
 
 MAX_OUTPUT_LINES = 60  # keep feedback short: every line goes into the context window
@@ -462,6 +463,26 @@ def luhn_ok(digits: str) -> bool:
     return total % 10 == 0
 
 
+def staged_claude_md_problems(root: Path) -> list[str]:
+    """Find staged CLAUDE.md files over the line limit.
+
+    Args:
+        root: Repository root.
+
+    Returns:
+        One message per file that is too long.
+    """
+    problems: list[str] = []
+    _, names = run("git diff --cached --name-only --diff-filter=ACMR", root, timeout=30)
+    for name in names.splitlines():
+        if is_claude_md(name):
+            _, staged_text = run(f"git show :{json.dumps(name)}", root, timeout=30)
+            staged_lines = count_lines(staged_text)
+            if staged_lines > max_lines():
+                problems.append(f"{name} has {staged_lines} lines (limit {max_lines()})")
+    return problems
+
+
 def scan_staged(root: Path) -> list[str]:
     """Scan staged files and added lines for secrets and client data.
 
@@ -518,6 +539,12 @@ def on_commit(payload: dict[str, Any]) -> int:
             "alone, so the gate checks exactly what will be committed. Do not use `commit -a`."
         )
     root = project_dir(payload)
+    too_long = staged_claude_md_problems(root)
+    if too_long:
+        block(
+            "CLAUDE.md is over the line limit: " + "; ".join(too_long) + ". Keep only rules Claude can't infer, "
+            "move long procedures into skills or docs and link to them, then re-stage."
+        )
     findings = scan_staged(root)
     if findings:
         block(

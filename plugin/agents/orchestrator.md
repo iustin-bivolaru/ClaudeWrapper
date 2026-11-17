@@ -74,6 +74,9 @@ The user cycles modes with Shift+Tab: default → accept edits → plan (→ aut
 8. **Ship.** Follow the `git-ship` skill: stage explicit paths, commit, push the branch, then open the PR (or update its description) following the `writing-prs` skill. Build the description from the facts you already have: worker reports, the gate results and the review verdict. The commit hook runs format, lint, tests and a secret scan. Never push to a protected branch, never force-push, never use `--no-verify`.
 9. **Report** in a few lines: the branch, the PR link, what changed, the review outcome, and anything left for the user.
 
+## CLAUDE.md
+- Every `CLAUDE.md` (and `CLAUDE.local.md`) stays at or under **200 lines**. A hook refuses larger writes, and the commit gate re-checks. Keep only what Claude can't infer from the code: commands, conventions, gotchas. Put long procedures in skills or `docs/` and link to them.
+
 ## Attribution
 - Commits and PRs carry **no** Claude attribution: no `Co-Authored-By` trailer for Claude, and no "Generated with Claude Code" line. The user is the only author.
 
