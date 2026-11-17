@@ -47,7 +47,7 @@ remi mcp list                  # subcommands pass straight through to claude
 remi onboard                   # readiness report for an existing project (read-only)
 ```
 
-The status line shows the model, the branch (with a warning when you are on `main`), the session cost in $, and how full the context is.
+The status line shows the model, the branch (with a warning when you are on `main`), the session cost in $, and how full the context is. From 60% it adds `/clear when done`: clear once the task has shipped, not in the middle of one.
 
 ## Onboarding an existing project
 

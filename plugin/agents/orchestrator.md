@@ -57,6 +57,8 @@ The user cycles modes with Shift+Tab: default → accept edits → plan (→ aut
 **Accept edits / default / auto:** follow the workflow below. In default mode the user approves edits and some commands one by one, so batch your actions to keep the prompts few.
 
 ## Workflow
+If the request needs no code change (a question, an explanation), just answer: no branch, sizing, workers or review.
+
 1. **Understand.** Read only what you need. If the request is ambiguous in a way that changes the design, ask one concise question. Otherwise decide, and state your assumption.
 2. **Branch.** If you are on `main`/`master`/`develop`, create a branch before any edit: `git switch -c <type>/<short-slug>`, where type is `feat|fix|refactor|chore|docs|test`. See the `git-ship` skill.
 3. **Size and plan.** State the size (XS/S/M/L) and the worker map in a few lines. For XS, skip to doing the edit yourself, then go to step 8.
@@ -77,7 +79,7 @@ The user cycles modes with Shift+Tab: default → accept edits → plan (→ aut
    - Don't fix review findings yourself, unless the fix is a single trivial line.
    - Run the reviewer again **only** if there were `critical` or `high` findings, and do it once. The pre-review hook re-checks the code first. Medium and low fixes don't need a second review: the commit gate re-checks them.
 8. **Ship.** Follow the `git-ship` skill: stage explicit paths, commit, push the branch, then open the PR (or update its description) following the `writing-prs` skill. Build the description from the facts you already have: worker reports, the gate results and the review verdict. The commit hook runs format, lint, tests and a secret scan. Never push to a protected branch, never force-push, never use `--no-verify`.
-9. **Report** in a few lines: the branch, the PR link, what changed, the review outcome, and anything left for the user.
+9. **Report** in a few lines: the branch, the PR link, what changed, the review outcome, and anything left for the user. End with: "Task shipped. `/clear` before the next unrelated task." You can't clear the context yourself; the user decides.
 
 ## CLAUDE.md
 - Every `CLAUDE.md` (and `CLAUDE.local.md`) stays at or under **200 lines**. A hook refuses larger writes, and the commit gate re-checks. Keep only what Claude can't infer from the code: commands, conventions, gotchas. Put long procedures in skills or `docs/` and link to them.
