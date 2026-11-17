@@ -491,7 +491,6 @@ def test_conventional_commit_allowed(repo, command):
         ("git commit -m 'feat: " + "x" * 120 + "'", "characters"),
         ("git commit", "pass the commit message with -m"),
         ("git commit -F message.txt", "pass the commit message with -m"),
-        ("gh pr create --title 'Add compound interest' --body x", "PR title"),
     ],
 )
 def test_non_conventional_commit_blocked(repo, command, reason):
@@ -501,7 +500,11 @@ def test_non_conventional_commit_blocked(repo, command, reason):
     assert reason in result.stderr, result.stderr
 
 
-def test_conventional_pr_title_allowed(repo):
+@pytest.mark.parametrize(
+    "title",
+    ["Add SEPA instant payments to transfers", "Fix rounding in long account statements"],
+)
+def test_plain_pr_title_allowed(repo, title):
     git(repo, "switch", "-qc", "feat/x")
-    command = "gh pr create --base main --title 'feat(fx): add daily rates import' --body 'What/why'"
+    command = f"gh pr create --base main --title '{title}' --body-file /tmp/body.md"
     assert run_hook("guard.py", tool("Bash", cwd=repo, command=command)).returncode == 0

@@ -1,6 +1,6 @@
 ---
 name: git-ship
-description: Branch, commit, push and PR workflow - create a feature branch before editing, stage explicit paths, conventional commit messages without any Claude attribution, push the branch (never protected branches, never force), open a pull request with gh. Use when starting a task on main or when committing, pushing or opening a PR.
+description: Branch, commit, push and PR workflow (PR text via writing-prs) - create a feature branch before editing, stage explicit paths, conventional commit messages without any Claude attribution, push the branch (never protected branches, never force), open a pull request with gh. Use when starting a task on main or when committing, pushing or opening a PR.
 ---
 
 # Branch → commit → push
@@ -28,7 +28,7 @@ git commit -m "<type>(<scope>): <imperative summary, ≤ 72 chars>" -m "<why, an
 ```
 
 ### Conventional Commits (enforced by a hook)
-The header is `<type>(<scope>)!: <description>`. The guard refuses any commit or PR title that doesn't match.
+The header is `<type>(<scope>)!: <description>`. The guard refuses any commit message that doesn't match. PR titles are plain sentences instead (see `writing-prs`).
 
 | Type | Use for |
 |---|---|
@@ -49,7 +49,7 @@ The header is `<type>(<scope>)!: <description>`. The guard refuses any commit or
 - **Description**: imperative mood, lowercase start, no trailing period, ≤ 72 characters for the whole header (hard limit 100).
 - **Body** (a second `-m`): explain *why*, not what the diff already shows. Reference tickets as `Refs: PAY-123`.
 - Always pass the message with `-m`. An editor or `-F file` can't be checked, so the hook refuses them.
-- The PR title follows the same format, because it usually becomes the squash-merge commit.
+- When squash-merging, make the squash commit title a Conventional header too. GitHub suggests the plain PR title.
 
 Examples:
 ```bash
@@ -71,23 +71,9 @@ git push origin HEAD
 - `gh pr create` uses `--head` explicitly, so the branch doesn't need upstream tracking.
 If the remote has diverged on your own branch: `git pull --rebase origin <branch>`, rerun tests, push again (`--force-with-lease` only on your own feature branch, and only after a rebase you did).
 
-## 4. Open the pull request
-```bash
-gh pr create --base <default-branch> --head "$(git branch --show-current)" \
-  --title "<type>(<scope>): <summary>" \
-  --body "## What
-<bullet list of changes>
-
-## Why
-<motivation / ticket id>
-
-## How it was verified
-<tests run, review outcome>"
-```
-- Find the default branch with `gh repo view --json defaultBranchRef -q .defaultBranchRef.name`.
-- If a PR for the branch already exists (`gh pr view`), just push: the PR updates itself.
-- The body follows the same rules as commit messages: no client data, no secrets, **no Claude attribution**.
-- Open it as `--draft` only if the user asks, or if work is knowingly unfinished.
+## 4. Open or update the pull request
+Load the **`writing-prs`** skill. It covers gathering the facts, the title, the body template, the security rules, and `gh pr create --body-file`.
+- If a PR already exists for the branch (`gh pr view`), pushing updates its commits. Also update its description when what the PR does has changed (`writing-prs`, step 5).
 
 ## 5. Report
 The branch name, the commit hash(es) (`git log --oneline -n 3`) and the PR URL.
