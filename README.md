@@ -44,9 +44,30 @@ remi --effort high            # think harder on a complex task (default: medium)
 remi --model sonnet            # cheaper orchestrator for simple tasks
 REMI_MAX_WORKERS=2 remi          # tighter parallelism
 remi mcp list                  # subcommands pass straight through to claude
+remi onboard                   # readiness report for an existing project (read-only)
 ```
 
 The status line shows the model, the branch (with a warning when you are on `main`), the session cost in $, and how full the context is.
+
+## Onboarding an existing project
+
+```bash
+cd ~/PycharmProjects/existing-service
+remi onboard
+```
+A **read-only** report. It changes nothing in the project, and never opens secret files.
+- **Git and GitHub:** branch, default branch, remote, uncommitted changes, `gh` login.
+- **Tooling:** pyproject, ruff, pytest, mypy, Makefile targets, and any existing `[tool.remi]` overrides.
+- **Code baseline:** how far the existing code is from the house style (unformatted files, project lint findings, missing docstrings, naming, f-strings in log calls, relative imports, single-letter names). It's information only: existing code is checked only where you change it (see "Legacy-safe" below).
+- **CLAUDE.md:** files found, and any over the 200-line limit.
+- **The project's own `.claude/`:** subagents (blocked under remi), skills (and which share a name with remi's), and hooks (a project ruff or black hook is flagged as a duplicate of remi's).
+- **Secrets:** secret files **by name only**. It flags any that are committed to git or not git-ignored, and a missing `.env.example`.
+- **Sandbox network:** package indexes from pyproject (`[tool.uv.index]`, Poetry sources) that the sandbox allowlist would block.
+
+At the end it offers to start a **plan-mode session**, with the findings filled in. That session maps the architecture, confirms the commands, drafts a CLAUDE.md (≤ 200 lines) and proposes a `[tool.remi]` block if needed. After you approve, it ships them on `chore/remi-onboarding` as a PR. To run it later:
+```bash
+remi --plan "$(remi onboard --print-prompt)"
+```
 
 ## Modes (Shift+Tab)
 
@@ -125,9 +146,17 @@ you: task ─▶ orchestrator: size it (XS/S/M/L), plan, worker map
 
 ## Quality gate
 
+**Legacy-safe.** A file that already exists in git is held to the rules **only on the lines the change adds or modifies**. Old code you don't touch is never reported, and is never reformatted unless that file was already ruff-clean. Concretely:
+- **Fix and format:** `ruff check --fix` and `ruff format` run on the whole file only if its committed version was already clean. Otherwise only the changed line ranges are formatted (`ruff format --range`).
+- **Lint and naming:** findings are filtered to the changed lines.
+- **New files:** checked in full.
+- **Typecheck and tests:** always run on the whole project.
+
+So one fixed line in an old module stays a one-line diff, and workers don't spend turns cleaning up code nobody asked them to touch.
+
 | When | What runs |
 |---|---|
-| After every Edit/Write of a `.py` file | `ruff check --fix` + `ruff format`, then lint with the docstring, pep8-naming, no-f-strings-in-logs (`G004`) and no-relative-imports (`TID252`) rules, plus the single-letter-name check; leftover issues go back to the agent |
+| After every Edit/Write of a `.py` file | `ruff check --fix` + `ruff format` (scoped as above), then lint (changed lines) with the docstring, pep8-naming, no-f-strings-in-logs (`G004`) and no-relative-imports (`TID252`) rules, plus the single-letter-name check; leftover issues go back to the agent |
 | When a worker tries to finish | `ruff check --fix` + `ruff format` + lint + naming on **the files that worker edited**, so it is never blocked by another worker's half-finished files. Tests run only if it is the last worker still running. The worker keeps going while red. |
 | Before `remi:reviewer` starts | Every worker must be finished. Then `ruff check --fix` + `ruff format` on the whole change, followed by naming → format check → lint → typecheck → tests. If anything is red, the review is refused and the failures go to the workers. |
 | Before `git commit` | secret scan → naming (staged files) → format check → lint → tests; the commit is refused on failure |

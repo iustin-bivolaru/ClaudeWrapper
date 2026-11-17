@@ -355,7 +355,7 @@ def test_commit_gate_blocks_single_letters(repo):
     git(repo, "add", "module.py")
     result = run_hook("quality.py", tool("Bash", cwd=repo, command="git commit -m x"), "commit")
     assert result.returncode == 2
-    assert "naming failed" in result.stderr
+    assert "single-letter variable 'i'" in result.stderr
 
 
 def test_project_defined_agents_blocked(tmp_path):
@@ -623,3 +623,175 @@ def test_explorer_does_not_take_a_worker_slot(tmp_path):
     assert run_hook("agent_policy.py", explorer, "pre", env=env).returncode == 0
     assert run_hook("agent_policy.py", explorer, "pre", env=env).returncode == 0
     assert run_hook("agent_policy.py", worker, "pre", env=env).returncode == 0
+
+
+# --- legacy-safe checks ------------------------------------------------------------
+
+LEGACY_SOURCE = """def f(x):
+    for i in range(x):
+        print(i)
+    return {  'a':1 }
+"""
+
+GOOD_ADDITION = '''
+
+def describe_balance(balance_amount: int) -> str:
+    """Describe a balance for a statement line."""
+    return f"balance {balance_amount}"
+'''
+
+
+@pytest.fixture
+def legacy_repo(repo: Path) -> Path:
+    (repo / "legacy.py").write_text(LEGACY_SOURCE)
+    git(repo, "add", "legacy.py")
+    git(repo, "commit", "-qm", "chore: add legacy module")
+    git(repo, "switch", "-qc", "feat/x")
+    return repo
+
+
+def edit_payload(repo: Path, file_name: str) -> dict:
+    return tool("Edit", cwd=repo, file_path=str(repo / file_name), old_string="x", new_string="y")
+
+
+def test_change_scope_ranges():
+    sys.path.insert(0, str(SCRIPTS))
+    from scope import ChangeScope
+
+    scope = ChangeScope(whole_file=False, changed_lines=frozenset({3, 4, 5, 9, 11, 12}))
+    assert scope.ranges() == [(3, 5), (9, 9), (11, 12)]
+    assert scope.covers(4) and not scope.covers(6)
+
+
+def test_edit_in_legacy_file_ignores_untouched_legacy_code(legacy_repo):
+    legacy_file = legacy_repo / "legacy.py"
+    legacy_file.write_text(LEGACY_SOURCE + GOOD_ADDITION)
+    result = run_hook("quality.py", edit_payload(legacy_repo, "legacy.py"), "edit", cwd=legacy_repo)
+    assert result.returncode == 0, result.stderr
+    content = legacy_file.read_text()
+    assert "def f(x):" in content and "{  'a':1 }" in content  # legacy lines untouched, not reformatted
+    assert "def describe_balance(balance_amount: int) -> str:" in content
+
+
+def test_edit_in_legacy_file_flags_only_new_violations(legacy_repo):
+    legacy_file = legacy_repo / "legacy.py"
+    legacy_file.write_text(
+        LEGACY_SOURCE + '\n\ndef add_fee(a: int) -> int:\n    """Add the fee."""\n    return a + 1\n'
+    )
+    result = run_hook("quality.py", edit_payload(legacy_repo, "legacy.py"), "edit", cwd=legacy_repo)
+    assert result.returncode == 2
+    assert "'a'" in result.stderr
+    assert "'x'" not in result.stderr and "'i'" not in result.stderr  # pre-existing names aren't reported
+
+
+def test_edit_in_legacy_file_formats_only_changed_range(legacy_repo):
+    legacy_file = legacy_repo / "legacy.py"
+    legacy_file.write_text(LEGACY_SOURCE + "\nFEES = {  'card':2 }\n")
+    result = run_hook("quality.py", edit_payload(legacy_repo, "legacy.py"), "edit", cwd=legacy_repo)
+    assert result.returncode == 0, result.stderr
+    content = legacy_file.read_text()
+    assert 'FEES = {"card": 2}' in content  # the changed line is formatted
+    assert "{  'a':1 }" in content  # the legacy line is not
+
+
+def test_new_file_is_checked_in_full(legacy_repo):
+    (legacy_repo / "fresh.py").write_text("def compute(x):\n    return x\n")
+    result = run_hook("quality.py", edit_payload(legacy_repo, "fresh.py"), "edit", cwd=legacy_repo)
+    assert result.returncode == 2
+    assert "D103" in result.stderr and "'x'" in result.stderr
+
+
+def test_commit_gate_passes_clean_change_in_legacy_file(legacy_repo):
+    (legacy_repo / "legacy.py").write_text(LEGACY_SOURCE + GOOD_ADDITION)
+    git(legacy_repo, "add", "legacy.py")
+    result = run_hook("quality.py", tool("Bash", cwd=legacy_repo, command="git commit -m 'feat: add x'"), "commit")
+    assert result.returncode == 0, result.stderr
+
+
+def test_commit_gate_refuses_unformatted_change_in_legacy_file(legacy_repo):
+    (legacy_repo / "legacy.py").write_text(LEGACY_SOURCE + "\nFEES = {  'card':2 }\n")
+    git(legacy_repo, "add", "legacy.py")
+    result = run_hook("quality.py", tool("Bash", cwd=legacy_repo, command="git commit -m 'feat: add x'"), "commit")
+    assert result.returncode == 2
+    assert "format failed" in result.stderr and "legacy.py" in result.stderr
+
+
+# --- remi onboard -----------------------------------------------------------------
+
+
+@pytest.fixture
+def onboarding_repo(repo: Path) -> Path:
+    (repo / "legacy.py").write_text(LEGACY_SOURCE)
+    (repo / ".gitignore").write_text(".env\n")
+    (repo / ".env").write_text("DB_PASSWORD=sentinel-secret-value\n")
+    (repo / ".env.production").write_text("API_TOKEN=committed-secret-value\n")
+    (repo / "CLAUDE.md").write_text(lines_of(250))
+    (repo / ".claude" / "agents").mkdir(parents=True)
+    (repo / ".claude" / "agents" / "layering-reviewer.md").write_text("---\nname: layering-reviewer\n---\n")
+    (repo / ".claude" / "skills" / "naming").mkdir(parents=True)
+    (repo / ".claude" / "skills" / "naming" / "SKILL.md").write_text("---\nname: naming\n---\n")
+    hooks = {
+        "hooks": {
+            "PostToolUse": [
+                {
+                    "matcher": "Edit",
+                    "hooks": [{"type": "command", "command": '"$CLAUDE_PROJECT_DIR"/.claude/hooks/ruff_on_edit.sh'}],
+                }
+            ]
+        }
+    }
+    (repo / ".claude" / "settings.json").write_text(json.dumps(hooks))
+    (repo / "pyproject.toml").write_text(
+        '[[tool.uv.index]]\nname = "corp"\nurl = "https://user@nexus.corp.example/simple"\n'
+    )
+    git(repo, "add", "legacy.py", ".gitignore", ".env.production", "CLAUDE.md", ".claude", "pyproject.toml")
+    git(repo, "commit", "-qm", "chore: legacy project")
+    return repo
+
+
+def run_onboard(repo: Path, *arguments: str) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        [sys.executable, str(SCRIPTS / "onboard.py"), *arguments],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        check=False,
+        stdin=subprocess.DEVNULL,
+    )
+
+
+def test_onboard_reports_project_state(onboarding_repo):
+    result = run_onboard(onboarding_repo, "--no-prompt")
+    assert result.returncode == 0, result.stderr
+    report = result.stdout
+    assert "CLAUDE.md: 250 lines (limit 200)" in report
+    assert "layering-reviewer: blocked under remi" in report
+    assert "same name as a remi skill: naming" in report
+    assert "duplicates remi's lint/format hook" in report
+    assert ".env.production is committed to git" in report
+    assert "git-ignored and unreadable for remi: .env" in report
+    assert "no .env.example" in report
+    assert "nexus.corp.example" in report and "allowlist" in report
+    assert "single-letter names: 3" in report  # f, x, i
+    assert "ruff format: 1 file(s) not formatted" in report
+    assert "remi --plan" in report
+
+
+def test_onboard_never_reads_secret_values(onboarding_repo):
+    result = run_onboard(onboarding_repo, "--no-prompt")
+    combined = result.stdout + result.stderr + run_onboard(onboarding_repo, "--print-prompt").stdout
+    assert "sentinel-secret-value" not in combined
+    assert "committed-secret-value" not in combined
+
+
+def test_onboard_prompt_carries_findings(onboarding_repo):
+    prompt = run_onboard(onboarding_repo, "--print-prompt").stdout
+    assert prompt.startswith("Onboard remi to this repository.")
+    assert "CLAUDE.md: 250 lines" in prompt
+    assert "service-architecture" in prompt and "chore/remi-onboarding" in prompt
+
+
+def test_onboard_outside_git(tmp_path):
+    result = run_onboard(tmp_path)
+    assert result.returncode == 2
+    assert "inside a git repository" in result.stderr

@@ -14,12 +14,19 @@ Modes (first CLI argument):
                must be done, and fix + format + lint + tests must pass on the
                whole change. A red gate refuses the review.
 
-Commands are auto-detected (uv / .venv / PATH) and can be overridden per
-project in ``pyproject.toml``::
+Legacy-safe: a file that already exists in ``HEAD`` is only held to the rules on the
+lines the change added or modified. Autofix and formatting run on the whole file only
+if the committed version was already clean; otherwise formatting is limited to the
+changed line ranges. New files are checked in full.
+
+Commands are auto-detected (uv / .venv / PATH). Lint and format default to ruff,
+scoped as above. Every step can be replaced per project in ``pyproject.toml``
+(a replaced step runs as given, over the whole project)::
 
     [tool.remi]
-    format = "uv run ruff format ."
     lint = "uv run ruff check ."
+    format = "uv run ruff format --check ."
+    typecheck = "uv run mypy src"
     test = "uv run pytest -q -x"
 """
 
@@ -40,7 +47,8 @@ from _common import ALLOW, BLOCK, block, is_secret_path, project_dir, read_paylo
 from agent_policy import _slot_name, slots_locked  # noqa: E402
 from agent_policy import on_stop as release_worker_slot  # noqa: E402
 from claude_md import count_lines, is_claude_md, max_lines  # noqa: E402
-from naming import find_short_names  # noqa: E402
+from naming import short_name_violations  # noqa: E402
+from scope import ChangeScope, change_scope, original_text, repository_path  # noqa: E402
 
 MAX_OUTPUT_LINES = 60  # keep feedback short: every line goes into the context window
 DOCSTRING_RULES = "D101,D102,D103,D106,D419"  # style-neutral: works for reST and Google
@@ -87,6 +95,27 @@ def run(cmd: str, cwd: Path, timeout: int = 900) -> tuple[int, str]:
     except subprocess.TimeoutExpired:
         return 124, f"timed out after {timeout}s: {cmd}"
     return proc.returncode, (proc.stdout + proc.stderr).strip()
+
+
+def run_stdout(cmd: str, cwd: Path, *, input_text: str | None = None, timeout: int = 120) -> tuple[int, str]:
+    """Run a shell command, optionally feeding stdin, and return only its stdout.
+
+    Args:
+        cmd: Shell command line.
+        cwd: Working directory.
+        input_text: Text to pass on stdin.
+        timeout: Seconds before the command is killed.
+
+    Returns:
+        Tuple of (exit code, stdout). Stderr is discarded so JSON output stays parseable.
+    """
+    try:
+        proc = subprocess.run(
+            cmd, shell=True, cwd=cwd, input=input_text, capture_output=True, text=True, timeout=timeout, check=False
+        )
+    except subprocess.TimeoutExpired:
+        return 124, ""
+    return proc.returncode, proc.stdout
 
 
 def tail(text: str, limit: int = MAX_OUTPUT_LINES) -> str:
@@ -179,12 +208,8 @@ def gate_commands(root: Path) -> list[tuple[str, str]]:
     overrides = load_overrides(root)
     steps: list[tuple[str, str]] = []
     ruff = python_tool(root, "ruff")
-    defaults = {
-        "format": f"{ruff} format --check ." if ruff else None,
-        "lint": f"{ruff} check ." if ruff else None,
-        "typecheck": None,
-        "test": None,
-    }
+    del ruff  # lint and format default to the scoped ruff checks in run_gate
+    defaults: dict[str, str | None] = {"format": None, "lint": None, "typecheck": None, "test": None}
     if has_tests(root):
         pytest = python_tool(root, "pytest")
         defaults["test"] = f"{pytest} -q -x --no-header -p no:cacheprovider" if pytest else None
@@ -229,34 +254,31 @@ def changed_python_files(root: Path, *, staged_only: bool) -> list[Path]:
     return sorted({candidate for candidate in candidates if candidate.is_file()})
 
 
-def naming_report(files: list[Path]) -> str | None:
-    """Check the given files for single-letter identifiers.
-
-    Args:
-        files: Python files to check.
-
-    Returns:
-        Failure report, or None when every name is descriptive.
-    """
-    violations = [message for file_path in files for message in find_short_names(file_path)]
-    if not violations:
-        return None
-    return "naming failed (single-letter names; see the naming skill):\n" + tail("\n".join(violations), 30)
-
-
 def run_gate(root: Path, *, staged_only: bool) -> str | None:
     """Run every gate step, stopping at the first failure.
 
+    Lint and format use the scoped ruff checks (changed lines of existing files, all of a
+    new file) unless the project replaces them in ``[tool.remi]``. Typecheck and tests
+    always run on the whole project.
+
     Args:
         root: Project root.
-        staged_only: Check names only in staged files (commit) rather than in every changed file.
+        staged_only: Check the staged change (commit gate) instead of the working tree.
 
     Returns:
         Failure report, or None when everything passed.
     """
-    naming_failure = naming_report(changed_python_files(root, staged_only=staged_only))
-    if naming_failure:
-        return naming_failure
+    files = changed_python_files(root, staged_only=staged_only)
+    overrides = load_overrides(root)
+    problems = lint_files(root, files, fix=False, staged=staged_only)
+    if problems:
+        return "lint failed on the changed lines (legacy code outside the change isn't checked):\n" + tail(
+            "\n".join(problems), 40
+        )
+    if "format" not in overrides:
+        unformatted = unformatted_files(root, files, staged=staged_only)
+        if unformatted:
+            return "format failed: run `ruff format` on the changed code in: " + ", ".join(unformatted)
     for step, cmd in gate_commands(root):
         code, out = run(cmd, root)
         if step == "test" and code == 5:  # pytest: no tests collected
@@ -293,55 +315,183 @@ def on_edit(payload: dict[str, Any]) -> int:
     return ALLOW
 
 
-def lint_files(root: Path, files: list[Path], *, fix: bool) -> list[str]:
-    """Optionally autofix and format some files, then report what is still wrong.
+def _is_test_file(file_path: Path) -> bool:
+    """Tell whether a file is a pytest module (docstring rules don't apply to tests).
 
-    The order is ``ruff check --fix``, then ``ruff format``, then a final ``ruff check``
-    with the house rules (docstrings, pep8-naming, logging, imports), then the
-    single-letter name check.
+    Args:
+        file_path: The file.
+
+    Returns:
+        True for ``test_*.py`` and ``conftest.py``.
+    """
+    return file_path.name.startswith("test_") or file_path.name == "conftest.py"
+
+
+def _committed_version_is_clean(ruff: str, root: Path, file_path: Path, original: str, *, check: str) -> bool:
+    """Tell whether the ``HEAD`` version of a file already passed a ruff check.
+
+    If it did, fixing or formatting the whole file only touches the new code. If it
+    didn't, doing so would rewrite untouched legacy lines.
+
+    Args:
+        ruff: The ruff command prefix.
+        root: Project root.
+        file_path: The file (used for config discovery).
+        original: Its content at ``HEAD``.
+        check: ``"format"`` or ``"lint"`` (the project's own rules, without house rules).
+
+    Returns:
+        True when the committed version was already clean.
+    """
+    stdin_name = json.dumps(str(file_path))
+    command = (
+        f"{ruff} format --check --quiet --stdin-filename {stdin_name} -"
+        if check == "format"
+        else f"{ruff} check --quiet --stdin-filename {stdin_name} -"
+    )
+    exit_code, _ = run_stdout(command, root, input_text=original)
+    return exit_code == 0
+
+
+def _apply_fixes(ruff: str, root: Path, file_path: Path, scope: ChangeScope) -> None:
+    """Autofix and format a file without rewriting untouched legacy lines.
+
+    Args:
+        ruff: The ruff command prefix.
+        root: Project root.
+        file_path: The file to fix in place.
+        scope: The lines the change touched.
+    """
+    quoted = json.dumps(str(file_path))
+    original = None if scope.whole_file else original_text(root, file_path)
+    if original is None or _committed_version_is_clean(ruff, root, file_path, original, check="lint"):
+        run(f"{ruff} check --fix --quiet {quoted}", root, timeout=120)
+    if original is None or _committed_version_is_clean(ruff, root, file_path, original, check="format"):
+        run(f"{ruff} format --quiet {quoted}", root, timeout=120)
+        return
+    for first_line, last_line in reversed(scope.ranges()):
+        run(f"{ruff} format --quiet --range {first_line}-{last_line + 1} {quoted}", root, timeout=120)
+
+
+def _scoped_ruff_problems(ruff: str, root: Path, file_path: Path, scope: ChangeScope) -> list[str]:
+    """Run ruff with the house rules and keep only findings on the changed lines.
+
+    Args:
+        ruff: The ruff command prefix.
+        root: Project root.
+        file_path: The file to check.
+        scope: The lines the change touched.
+
+    Returns:
+        ``path:line:col: CODE message`` strings.
+    """
+    rules = (
+        f"{NAMING_RULES},{HOUSE_RULES}"
+        if _is_test_file(file_path)
+        else f"{DOCSTRING_RULES},{NAMING_RULES},{HOUSE_RULES}"
+    )
+    exit_code, output = run_stdout(
+        f"{ruff} check --quiet --output-format json --extend-select {rules} {json.dumps(str(file_path))}", root
+    )
+    if exit_code == 0:
+        return []
+    try:
+        findings = json.loads(output or "[]")
+    except ValueError:
+        return [f"{file_path}: ruff failed to run"]
+    display_name = repository_path(root, file_path) or str(file_path)
+    problems = []
+    for finding in findings:
+        row = (finding.get("location") or {}).get("row", 0)
+        if scope.covers(row):
+            column = (finding.get("location") or {}).get("column", 0)
+            problems.append(f"{display_name}:{row}:{column}: {finding.get('code')} {finding.get('message')}")
+    return problems
+
+
+def lint_files(root: Path, files: list[Path], *, fix: bool, staged: bool = False) -> list[str]:
+    """Optionally fix and format files, then report what is wrong in the changed lines.
+
+    The order is ``ruff check --fix``, then ``ruff format``, then a ``ruff check`` with
+    the house rules (docstrings, pep8-naming, logging, imports), then the single-letter
+    name check. New files are handled in full. Existing files are only checked on the
+    lines the change added or modified. They're fixed and formatted as a whole only
+    when the committed version was already clean, and otherwise formatted per changed
+    range. That keeps diffs and agent work focused on the change.
 
     Args:
         root: Project root.
         files: Python files to process.
         fix: Apply fixes and formatting before checking.
+        staged: Scope to the staged change (commit gate) instead of the working tree.
 
     Returns:
-        Problem reports; empty when the files are clean.
+        Problem reports; empty when the changed code is clean.
     """
     existing = [file_path for file_path in files if file_path.suffix == ".py" and file_path.is_file()]
-    if not existing:
-        return []
+    ruff = python_tool(root, "ruff") if existing else None
     problems: list[str] = []
-    ruff = python_tool(root, "ruff")
-    if ruff:
-        quoted = " ".join(json.dumps(str(file_path)) for file_path in existing)
-        if fix:
-            run(f"{ruff} check --fix --quiet {quoted}", root, timeout=120)
-            run(f"{ruff} format --quiet {quoted}", root, timeout=120)
-        non_test = [
-            json.dumps(str(file_path))
-            for file_path in existing
-            if not (file_path.name.startswith("test_") or file_path.name == "conftest.py")
-        ]
-        tests_only = [
-            json.dumps(str(file_path)) for file_path in existing if json.dumps(str(file_path)) not in non_test
-        ]
-        for selected, rules in (
-            (non_test, f"{DOCSTRING_RULES},{NAMING_RULES},{HOUSE_RULES}"),
-            (tests_only, f"{NAMING_RULES},{HOUSE_RULES}"),
-        ):
-            if not selected:
-                continue
-            exit_code, lint_output = run(
-                f"{ruff} check --quiet --output-format concise --extend-select {rules} {' '.join(selected)}",
-                root,
-                timeout=120,
-            )
-            if exit_code != 0 and lint_output:
-                problems.append(lint_output)
     for file_path in existing:
-        problems += find_short_names(file_path)
+        scope = change_scope(root, file_path, staged=staged)
+        if scope.is_empty:
+            continue
+        if ruff and fix:
+            _apply_fixes(ruff, root, file_path, scope)
+            scope = change_scope(root, file_path, staged=staged)
+        if ruff:
+            problems += _scoped_ruff_problems(ruff, root, file_path, scope)
+        display_name = repository_path(root, file_path) or str(file_path)
+        problems += [
+            f"{display_name}:{line_number}: {message}"
+            for line_number, message in short_name_violations(file_path)
+            if scope.covers(line_number)
+        ]
     return problems
+
+
+def unformatted_files(root: Path, files: list[Path], *, staged: bool = False) -> list[str]:
+    """List changed files whose changed code isn't ruff-formatted.
+
+    Files whose committed version was already formatted (and new files) must be fully
+    formatted. For legacy files, only the changed ranges are compared with what
+    ``ruff format --range`` would produce.
+
+    Args:
+        root: Project root.
+        files: Changed Python files.
+        staged: Scope to the staged change.
+
+    Returns:
+        Display names of the files that need formatting.
+    """
+    ruff = python_tool(root, "ruff")
+    if not ruff:
+        return []
+    unformatted: list[str] = []
+    for file_path in (candidate for candidate in files if candidate.suffix == ".py" and candidate.is_file()):
+        scope = change_scope(root, file_path, staged=staged)
+        if scope.is_empty:
+            continue
+        stdin_name = json.dumps(str(file_path))
+        current = file_path.read_text(encoding="utf-8")
+        original = None if scope.whole_file else original_text(root, file_path)
+        if original is None or _committed_version_is_clean(ruff, root, file_path, original, check="format"):
+            exit_code, _ = run_stdout(
+                f"{ruff} format --check --quiet --stdin-filename {stdin_name} -", root, input_text=current
+            )
+            needs_format = exit_code != 0
+        else:
+            formatted = current
+            for first_line, last_line in reversed(scope.ranges()):
+                _, formatted = run_stdout(
+                    f"{ruff} format --quiet --range {first_line}-{last_line + 1} --stdin-filename {stdin_name} -",
+                    root,
+                    input_text=formatted,
+                )
+            needs_format = bool(formatted) and formatted != current
+        if needs_format:
+            unformatted.append(repository_path(root, file_path) or str(file_path))
+    return unformatted
 
 
 def _edits_log(payload: dict[str, Any]) -> Path:
