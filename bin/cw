@@ -9,6 +9,9 @@
 #   CW_WORKER_MODEL        (sonnet)  CW_WORKER_EFFORT       (medium)
 #   CW_REVIEWER_MODEL      (opus)    CW_REVIEWER_EFFORT     (medium)
 #   CW_MAX_WORKERS         (3)       CW_NO_BANNER           (unset)
+#   CW_PERMISSION_MODE     (claude's default) starting mode: manual | acceptEdits | plan | auto
+#                          also: --plan (shortcut for --permission-mode plan), --permission-mode <mode>
+# Switch modes during a session with Shift+Tab, as in plain Claude Code.
 # Config file: ${XDG_CONFIG_HOME:-~/.config}/cw/config, with KEY=VALUE lines (only CW_* keys are read).
 set -euo pipefail
 
@@ -91,6 +94,13 @@ wrapper_args=(
   --settings "$CW_HOME/settings/settings.json"
   --agent "cw:orchestrator"
 )
+# `--plan` is a cw shortcut, not a claude flag: translate it.
+passthrough_args=()
+for argument in "$@"; do
+  if [ "$argument" = "--plan" ]; then passthrough_args+=(--permission-mode plan); else passthrough_args+=("$argument"); fi
+done
+set -- ${passthrough_args[@]+"${passthrough_args[@]}"}
+
 orchestrator_model="$CW_ORCHESTRATOR_MODEL"
 orchestrator_effort="$CW_ORCHESTRATOR_EFFORT"
 is_print_mode=false
@@ -109,6 +119,23 @@ for argument in "$@"; do
 done
 case " $* " in *" --model "*|*" --model="*) ;; *) wrapper_args+=(--model "$orchestrator_model") ;; esac
 case " $* " in *" --effort "*|*" --effort="*) ;; *) wrapper_args+=(--effort "$orchestrator_effort") ;; esac
+start_mode=""
+case " $* " in
+  *" --permission-mode "*|*" --permission-mode="*) ;;
+  *)
+    if [ -n "${CW_PERMISSION_MODE:-}" ]; then
+      case "$CW_PERMISSION_MODE" in
+        manual|acceptEdits|plan|auto) wrapper_args+=(--permission-mode "$CW_PERMISSION_MODE"); start_mode="$CW_PERMISSION_MODE" ;;
+        *) echo "cw: CW_PERMISSION_MODE='$CW_PERMISSION_MODE' must be one of: manual acceptEdits plan auto" >&2; exit 2 ;;
+      esac
+    fi ;;
+esac
+previous_argument=""
+for argument in "$@"; do
+  case "$argument" in --permission-mode=*) start_mode="${argument#--permission-mode=}" ;; esac
+  [ "$previous_argument" = "--permission-mode" ] && start_mode="$argument"
+  previous_argument="$argument"
+done
 
 # --- the cw hamster: monochrome, interactive sessions only ------------------------------
 if [ -t 1 ] && [ "$is_print_mode" = false ] && [ -z "${CW_NO_BANNER:-}" ]; then
@@ -117,7 +144,7 @@ if [ -t 1 ] && [ "$is_print_mode" = false ] && [ -z "${CW_NO_BANNER:-}" ]; then
  ▗█▖ ▗█▖   cw
  ▟▀███▀▙   orchestrator ${orchestrator_model}/${orchestrator_effort} · workers ${CW_WORKER_MODEL}/${CW_WORKER_EFFORT} 1–${CW_MAX_WORKERS} by size · reviewer ${CW_REVIEWER_MODEL}/${CW_REVIEWER_EFFORT}
  ▜█████▛   sandbox on · secrets guarded · branch ${branch}
-  ▘▘ ▝▝
+  ▘▘ ▝▝    ${start_mode:+mode ${start_mode} · }shift+tab cycles modes (plan · accept edits · default)
 BANNER
 fi
 
