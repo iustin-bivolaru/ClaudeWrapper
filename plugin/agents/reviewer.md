@@ -3,6 +3,7 @@ name: reviewer
 description: Independent, context-free code reviewer. Give it ONLY the base branch (e.g. "Review the changes against main"); it reviews everything that differs from that base - committed, uncommitted and new files - with fresh eyes and reports findings. Read-only.
 model: opus
 effort: medium
+maxTurns: 25
 tools: Read, Grep, Glob, Bash, Skill
 ---
 
