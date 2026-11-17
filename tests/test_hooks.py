@@ -517,3 +517,89 @@ def test_plan_subagent_redirected_to_orchestrator(tmp_path):
     assert result.returncode == 2
     assert "designs the plan itself" in result.stderr
     assert "ExitPlanMode" in result.stderr
+
+
+# --- CLAUDE.md line limit -------------------------------------------------------------
+
+
+def lines_of(count: int) -> str:
+    return "".join(f"- rule {number}\n" for number in range(count))
+
+
+@pytest.mark.parametrize(
+    "path", ["CLAUDE.md", "/repo/CLAUDE.md", "/repo/.claude/CLAUDE.md", "/repo/api/CLAUDE.local.md"]
+)
+def test_claude_md_write_over_limit_blocked(path):
+    result = run_hook("claude_md.py", tool("Write", file_path=path, content=lines_of(201)))
+    assert result.returncode == 2
+    assert "201 lines; the limit is 200" in result.stderr
+
+
+def test_claude_md_write_at_limit_allowed():
+    assert run_hook("claude_md.py", tool("Write", file_path="CLAUDE.md", content=lines_of(200))).returncode == 0
+
+
+def test_other_markdown_not_limited():
+    assert run_hook("claude_md.py", tool("Write", file_path="README.md", content=lines_of(500))).returncode == 0
+    assert (
+        run_hook("claude_md.py", tool("Write", file_path="docs/CLAUDE.md.bak", content=lines_of(500))).returncode == 0
+    )
+
+
+def test_claude_md_edit_computes_result(tmp_path):
+    claude_md = tmp_path / "CLAUDE.md"
+    claude_md.write_text(lines_of(199))
+    growing = tool("Edit", file_path=str(claude_md), old_string="- rule 0\n", new_string="- rule 0\n- a\n- b\n")
+    assert run_hook("claude_md.py", growing).returncode == 2
+    shrinking = tool("Edit", file_path=str(claude_md), old_string="- rule 0\n- rule 1\n", new_string="- rules 0-1\n")
+    assert run_hook("claude_md.py", shrinking).returncode == 0
+
+
+def test_claude_md_multiedit(tmp_path):
+    claude_md = tmp_path / "CLAUDE.md"
+    claude_md.write_text(lines_of(200))
+    edits = [{"old_string": "- rule 1\n", "new_string": "- rule 1\n- extra\n"}]
+    assert run_hook("claude_md.py", tool("MultiEdit", file_path=str(claude_md), edits=edits)).returncode == 2
+
+
+def test_claude_md_limit_configurable():
+    env = {"CW_CLAUDE_MD_MAX_LINES": "50", "PATH": "/usr/bin:/bin"}
+    result = run_hook("claude_md.py", tool("Write", file_path="CLAUDE.md", content=lines_of(51)), env=env)
+    assert result.returncode == 2
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "echo '- rule' >> CLAUDE.md",
+        "cat notes.md > CLAUDE.md",
+        "printf x | tee -a .claude/CLAUDE.md",
+        "sed -i '' 's/a/b/' CLAUDE.md",
+        "cp ../other/CLAUDE.md CLAUDE.md",
+    ],
+)
+def test_claude_md_shell_writes_blocked(command):
+    assert run_hook("claude_md.py", tool("Bash", command=command)).returncode == 2
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cat CLAUDE.md",
+        "wc -l CLAUDE.md",
+        "grep -n rule CLAUDE.md",
+        "git add CLAUDE.md",
+        "cp CLAUDE.md /tmp/backup.md",
+    ],
+)
+def test_claude_md_shell_reads_allowed(command):
+    assert run_hook("claude_md.py", tool("Bash", command=command)).returncode == 0
+
+
+def test_commit_gate_blocks_long_claude_md(repo):
+    git(repo, "switch", "-qc", "feat/x")
+    (repo / "CLAUDE.md").write_text(lines_of(250))
+    git(repo, "add", "CLAUDE.md")
+    result = run_hook("quality.py", tool("Bash", cwd=repo, command="git commit -m 'docs: add claude.md'"), "commit")
+    assert result.returncode == 2
+    assert "CLAUDE.md has 250 lines (limit 200)" in result.stderr

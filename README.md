@@ -142,6 +142,14 @@ typecheck = "uv run mypy src"
 test = "uv run pytest -q -x -m 'not integration'"
 ```
 
+## CLAUDE.md line limit
+
+Every `CLAUDE.md` / `CLAUDE.local.md`, at any depth, stays at or under **200 lines**. It is loaded into every request, so each line costs tokens every time.
+- **Write / Edit / MultiEdit:** the hook works out the resulting file and refuses the change if it would exceed the limit. It also tells Claude how to shrink it: keep only rules it can't infer, drop what linters already enforce, move procedures into skills or `docs/`, and compress prose into bullets.
+- **Shell:** redirects, `tee`, `sed -i`, and `cp`/`mv` onto a CLAUDE.md are refused, because their result can't be checked in advance.
+- **Commit gate:** staged CLAUDE.md files over the limit block the commit.
+- Change the limit with `CW_CLAUDE_MD_MAX_LINES`.
+
 ## Cost controls
 
 - Opus plans and Sonnet does the typing: implementation is delegated to workers.
