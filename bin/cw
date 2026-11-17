@@ -37,7 +37,7 @@ print_banner() {
   branch="$(git symbolic-ref --short -q HEAD 2>/dev/null || echo -)"
   cat <<BANNER
  ▗█▖ ▗█▖   cw
- ▟▀███▀▙   orchestrator opus · workers sonnet ×${CW_MAX_WORKERS:-4} · reviewer opus
+ ▟▀███▀▙   orchestrator opus · workers sonnet 1–${CW_MAX_WORKERS:-4} by size · reviewer opus
  ▜█████▛   sandbox on · secrets guarded · branch ${branch}
   ▘▘ ▝▝
 BANNER
