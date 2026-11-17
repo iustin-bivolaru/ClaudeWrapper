@@ -36,8 +36,9 @@ from agent_policy import on_stop as release_worker_slot  # noqa: E402
 from naming import find_short_names  # noqa: E402
 
 MAX_OUTPUT_LINES = 60  # keep feedback short: every line goes into the context window
-DOCSTRING_RULES = "D101,D102,D103,D106,D417,D419"
+DOCSTRING_RULES = "D101,D102,D103,D106,D419"  # style-neutral: works for reST and Google
 NAMING_RULES = "N801,N802,N803,N806,N815,N816"  # pep8-naming: snake_case variables
+HOUSE_RULES = "G004,TID252"  # no f-strings in log calls, no relative imports
 
 SECRET_CONTENT_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = tuple(
     (re.compile(pattern_text), reason)
@@ -276,7 +277,7 @@ def on_edit(payload: dict[str, Any]) -> int:
         quoted = json.dumps(str(path))
         run(f"{ruff} format --quiet {quoted}", root, timeout=60)
         is_test = path.name.startswith("test_") or path.name == "conftest.py"
-        rules = NAMING_RULES if is_test else f"{DOCSTRING_RULES},{NAMING_RULES}"
+        rules = f"{NAMING_RULES},{HOUSE_RULES}" if is_test else f"{DOCSTRING_RULES},{NAMING_RULES},{HOUSE_RULES}"
         lint_command = f"{ruff} check --fix --quiet --output-format concise --extend-select {rules} {quoted}"
         exit_code, lint_output = run(lint_command, root, timeout=60)
         if exit_code != 0 and lint_output:
@@ -285,7 +286,7 @@ def on_edit(payload: dict[str, Any]) -> int:
     if problems:
         print(
             f"Lint issues remain in {path.name}. Fix them now: public functions, methods and classes need "
-            f"Google-style docstrings, and names must be descriptive snake_case words, never single letters:\n"
+            f"docstrings, and names must be descriptive snake_case words, never single letters:\n"
             f"{tail(chr(10).join(problems), 30)}",
             file=sys.stderr,
         )
