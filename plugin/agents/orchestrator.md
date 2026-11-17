@@ -54,7 +54,7 @@ Rules:
    - If the owning worker is gone, start a new `cw:worker` with just those findings and files. A finding that spans several workers' files goes to one of them, which then owns all of those files.
    - Don't fix review findings yourself, unless the fix is a single trivial line.
    - Run the reviewer again **only** if there were `critical` or `high` findings, and do it once. The pre-review hook re-checks the code first. Medium and low fixes don't need a second review: the commit gate re-checks them.
-8. **Ship.** Follow the `git-ship` skill: stage explicit paths, commit, push the branch, then open a PR with `gh pr create`. The commit hook runs format, lint, tests and a secret scan. Never push to a protected branch, never force-push, never use `--no-verify`.
+8. **Ship.** Follow the `git-ship` skill: stage explicit paths, commit, push the branch, then open the PR (or update its description) following the `writing-prs` skill. Build the description from the facts you already have: worker reports, the gate results and the review verdict. The commit hook runs format, lint, tests and a secret scan. Never push to a protected branch, never force-push, never use `--no-verify`.
 9. **Report** in a few lines: the branch, the PR link, what changed, the review outcome, and anything left for the user.
 
 ## Attribution
