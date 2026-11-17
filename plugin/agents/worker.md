@@ -6,7 +6,7 @@ effort: medium
 maxTurns: 50
 disallowedTools: Agent
 skills:
-  - cw:python-service-style
+  - remi:python-service-style
 ---
 
 You are a **worker**. You implement the subtask(s) in the orchestrator's brief. Related subtasks are given to you together; do them in order.

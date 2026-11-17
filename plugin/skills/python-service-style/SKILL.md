@@ -94,5 +94,5 @@ The sandbox blocks reading `.env`. So anything that loads it, such as the dev se
 
 1. Run the project's lint and format-check commands.
 2. Check for: a bare string where an enum exists, a missing docstring, an f-string in a log call, a library exception leaking past its layer, or a secret or personal data in a log.
-3. Don't run reviews yourself. Under `cw`, the orchestrator runs `cw:reviewer` on the whole branch. Mention any risky part (a migration, a prompt change, auth) in your report so it gets attention.
+3. Don't run reviews yourself. Under `remi`, the orchestrator runs `remi:reviewer` on the whole branch. Mention any risky part (a migration, a prompt change, auth) in your report so it gets attention.
 4. If there is no test suite, exercise the change with a small script in the project's dev or scripts folder, and say what you ran.

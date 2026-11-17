@@ -1,4 +1,4 @@
-"""Shared helpers for Claude Wrapper hook scripts.
+"""Shared helpers for remi hook scripts.
 
 Hooks receive a JSON payload on stdin and communicate back through the exit
 code: ``0`` allows the action, ``2`` blocks it and feeds stderr back to Claude.
@@ -73,7 +73,7 @@ def block(reason: str) -> NoReturn:
     Args:
         reason: Human-readable explanation, shown to the model via stderr.
     """
-    print(f"[claude-wrapper] BLOCKED: {reason}", file=sys.stderr)
+    print(f"[remi] BLOCKED: {reason}", file=sys.stderr)
     sys.exit(BLOCK)
 
 
@@ -116,7 +116,7 @@ def state_dir(payload: dict[str, Any]) -> Path:
     Returns:
         An existing directory under the system temp folder.
     """
-    base = Path(os.environ.get("TMPDIR", "/tmp")) / "cw"
+    base = Path(os.environ.get("TMPDIR", "/tmp")) / "remi"
     session = re.sub(r"[^\w-]", "_", str(payload.get("session_id") or "default"))
     path = base / session
     path.mkdir(parents=True, exist_ok=True)

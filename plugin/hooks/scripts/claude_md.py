@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Keep every CLAUDE.md at or under ``CW_CLAUDE_MD_MAX_LINES`` (default 200) lines.
+"""Keep every CLAUDE.md at or under ``REMI_CLAUDE_MD_MAX_LINES`` (default 200) lines.
 
 CLAUDE.md is loaded into every session's context, so each extra line costs tokens on
 every request. This PreToolUse hook works out the file as it would look after a
@@ -33,10 +33,10 @@ def max_lines() -> int:
     """Return the configured line limit.
 
     Returns:
-        Value of ``CW_CLAUDE_MD_MAX_LINES``, defaulting to 200.
+        Value of ``REMI_CLAUDE_MD_MAX_LINES``, defaulting to 200.
     """
     try:
-        return max(1, int(os.environ.get("CW_CLAUDE_MD_MAX_LINES", "200")))
+        return max(1, int(os.environ.get("REMI_CLAUDE_MD_MAX_LINES", "200")))
     except ValueError:
         return 200
 

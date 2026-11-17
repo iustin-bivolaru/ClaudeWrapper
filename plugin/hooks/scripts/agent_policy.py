@@ -3,7 +3,7 @@
 
 * ``pre``  - PreToolUse on Agent: refuse expensive general-purpose subagents
              (they inherit the Opus orchestrator model) and refuse a new worker
-             when ``CW_MAX_WORKERS`` (default 3) are already running.
+             when ``REMI_MAX_WORKERS`` (default 3) are already running.
 * ``start`` - SubagentStart: turn a pending reservation into an active slot
                keyed by the worker's ``agent_id``.
 * ``stop``  - SubagentStop: free that worker's slot.
@@ -35,10 +35,10 @@ from _common import ALLOW, block, read_payload, state_dir  # noqa: E402
 
 SLOT_TTL_SECONDS = 45 * 60
 REDIRECT = {
-    "general-purpose": "cw:worker",
-    "claude": "cw:worker",
+    "general-purpose": "remi:worker",
+    "claude": "remi:worker",
 }
-ALLOWED_AGENT_TYPES = frozenset({"cw:worker", "cw:reviewer", "cw:explorer"})
+ALLOWED_AGENT_TYPES = frozenset({"remi:worker", "remi:reviewer", "remi:explorer"})
 """Only the wrapper's own agents (the explorer runs on Haiku; the built-in Explore inherits the expensive session model) may run; project-defined agents are refused."""
 
 
@@ -46,10 +46,10 @@ def max_workers() -> int:
     """Return the configured parallel-worker limit.
 
     Returns:
-        Value of ``CW_MAX_WORKERS``, defaulting to 3.
+        Value of ``REMI_MAX_WORKERS``, defaulting to 3.
     """
     try:
-        return max(1, int(os.environ.get("CW_MAX_WORKERS", "3")))
+        return max(1, int(os.environ.get("REMI_MAX_WORKERS", "3")))
     except ValueError:
         return 3
 
@@ -100,7 +100,7 @@ def _is_worker(payload: dict[str, Any]) -> bool:
         payload: SubagentStart or SubagentStop payload.
 
     Returns:
-        True for ``cw:worker`` (or any agent type ending in ``worker``).
+        True for ``remi:worker`` (or any agent type ending in ``worker``).
     """
     return str(payload.get("agent_type", "")).endswith("worker")
 
@@ -132,24 +132,24 @@ def on_pre(payload: dict[str, Any]) -> int:
         block(
             f"'{agent_type}' runs on the expensive orchestrator model. Use "
             f"subagent_type='{REDIRECT[agent_type]}' (Sonnet) for implementation, "
-            "'cw:explorer' (Haiku) for broad searches, or 'cw:reviewer' for review."
+            "'remi:explorer' (Haiku) for broad searches, or 'remi:reviewer' for review."
         )
     if agent_type == "Plan":
         block(
-            "in cw the orchestrator designs the plan itself, and 'Plan' subagents would run on the expensive "
-            "orchestrator model. Research with Grep/Read yourself, or cw:explorer for broad sweeps, then write the plan file and call "
+            "in remi the orchestrator designs the plan itself, and 'Plan' subagents would run on the expensive "
+            "orchestrator model. Research with Grep/Read yourself, or remi:explorer for broad sweeps, then write the plan file and call "
             "ExitPlanMode."
         )
     if agent_type == "Explore":
         block(
             "the built-in 'Explore' runs on the session's model (Opus), not a cheap one. For a targeted lookup, use "
             "Grep and Read yourself: starting any subagent costs about 20k tokens. For a broad sweep across many "
-            "directories, use subagent_type='cw:explorer' (Haiku, read-only)."
+            "directories, use subagent_type='remi:explorer' (Haiku, read-only)."
         )
     if agent_type not in ALLOWED_AGENT_TYPES:
         block(
-            f"subagent '{agent_type}' is not part of cw. Use only cw:worker (implementation), "
-            "cw:reviewer (review) or cw:explorer (broad search)."
+            f"subagent '{agent_type}' is not part of remi. Use only remi:worker (implementation), "
+            "remi:reviewer (review) or remi:explorer (broad search)."
         )
     if not agent_type.endswith("worker"):
         return ALLOW
