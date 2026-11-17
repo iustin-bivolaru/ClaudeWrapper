@@ -10,14 +10,14 @@ Modes (first CLI argument):
 * ``worker`` - SubagentStop: ``ruff check --fix`` + ``ruff format`` on the files
                this worker edited, then lint them; run the tests when no other
                worker is still running. A worker may not finish while red.
-* ``review`` - PreToolUse on Agent: before ``cw:reviewer`` starts, every worker
+* ``review`` - PreToolUse on Agent: before ``remi:reviewer`` starts, every worker
                must be done, and fix + format + lint + tests must pass on the
                whole change. A red gate refuses the review.
 
 Commands are auto-detected (uv / .venv / PATH) and can be overridden per
 project in ``pyproject.toml``::
 
-    [tool.cw]
+    [tool.remi]
     format = "uv run ruff format ."
     lint = "uv run ruff check ."
     test = "uv run pytest -q -x"
@@ -68,7 +68,7 @@ SECRET_CONTENT_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = tuple(
     )
 )
 CARD_CANDIDATE = re.compile(r"\b(?:\d[ -]?){13,19}\b")
-ALLOW_MARKER = "cw: allow-secret"
+ALLOW_MARKER = "remi: allow-secret"
 
 
 def run(cmd: str, cwd: Path, timeout: int = 900) -> tuple[int, str]:
@@ -106,7 +106,7 @@ def tail(text: str, limit: int = MAX_OUTPUT_LINES) -> str:
 
 
 def load_overrides(root: Path) -> dict[str, str]:
-    """Read ``[tool.cw]`` command overrides from pyproject.toml.
+    """Read ``[tool.remi]`` command overrides from pyproject.toml.
 
     Args:
         root: Project root.
@@ -121,7 +121,7 @@ def load_overrides(root: Path) -> dict[str, str]:
         data = tomllib.loads(pyproject.read_text())
     except (OSError, tomllib.TOMLDecodeError):
         return {}
-    section = data.get("tool", {}).get("cw", {})
+    section = data.get("tool", {}).get("remi", {})
     return {step_name: str(command) for step_name, command in section.items() if isinstance(command, str)}
 
 
@@ -432,7 +432,7 @@ def run_steps(root: Path, wanted: set[str]) -> str | None:
 def apply_project_fixes(root: Path, files: list[Path]) -> None:
     """Apply autofix and formatting to the change before a full gate.
 
-    Uses ``[tool.cw] fix`` when the project sets it, otherwise ruff on the given files.
+    Uses ``[tool.remi] fix`` when the project sets it, otherwise ruff on the given files.
 
     Args:
         root: Project root.

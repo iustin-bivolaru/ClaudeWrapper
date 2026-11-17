@@ -194,7 +194,7 @@ def test_commit_gate_finds_secrets(repo, content):
 
 def test_commit_gate_allow_marker_and_clean_commit(repo):
     git(repo, "switch", "-qc", "feat/x")
-    (repo / "fixture.txt").write_text("card = '4111111111111111'  # cw: allow-secret\nplain text\n")
+    (repo / "fixture.txt").write_text("card = '4111111111111111'  # remi: allow-secret\nplain text\n")
     git(repo, "add", "fixture.txt")
     result = run_hook("quality.py", tool("Bash", cwd=repo, command="git commit -m x"), "commit")
     assert result.returncode == 0, result.stderr
@@ -202,7 +202,7 @@ def test_commit_gate_allow_marker_and_clean_commit(repo):
 
 def test_commit_gate_runs_project_override(repo):
     git(repo, "switch", "-qc", "feat/x")
-    (repo / "pyproject.toml").write_text('[tool.cw]\ntest = "exit 3"\n')
+    (repo / "pyproject.toml").write_text('[tool.remi]\ntest = "exit 3"\n')
     git(repo, "add", "pyproject.toml")
     result = run_hook("quality.py", tool("Bash", cwd=repo, command="git commit -m x"), "commit")
     assert result.returncode == 2
@@ -217,18 +217,18 @@ def test_general_purpose_agent_redirected(tmp_path):
     payload["session_id"] = tmp_path.name
     result = run_hook("agent_policy.py", payload, "pre")
     assert result.returncode == 2
-    assert "cw:worker" in result.stderr
+    assert "remi:worker" in result.stderr
 
 
 def worker_event(session: str, agent_id: str, event: str) -> dict:
-    return {"session_id": session, "agent_type": "cw:worker", "agent_id": agent_id, "hook_event_name": event}
+    return {"session_id": session, "agent_type": "remi:worker", "agent_id": agent_id, "hook_event_name": event}
 
 
 def test_worker_cap(tmp_path):
     session = f"cap-{tmp_path.name}"
-    pre = tool("Agent", subagent_type="cw:worker", prompt="x")
+    pre = tool("Agent", subagent_type="remi:worker", prompt="x")
     pre["session_id"] = session
-    env = {"TMPDIR": str(tmp_path), "CW_MAX_WORKERS": "2", "PATH": "/usr/bin:/bin"}
+    env = {"TMPDIR": str(tmp_path), "REMI_MAX_WORKERS": "2", "PATH": "/usr/bin:/bin"}
     assert run_hook("agent_policy.py", pre, "pre", env=env).returncode == 0
     assert (
         run_hook("agent_policy.py", worker_event(session, "agent-one", "SubagentStart"), "start", env=env).returncode
@@ -243,9 +243,9 @@ def test_worker_cap(tmp_path):
 
 def test_resumed_worker_does_not_free_other_slots(tmp_path):
     session = f"resume-{tmp_path.name}"
-    pre = tool("Agent", subagent_type="cw:worker", prompt="x")
+    pre = tool("Agent", subagent_type="remi:worker", prompt="x")
     pre["session_id"] = session
-    env = {"TMPDIR": str(tmp_path), "CW_MAX_WORKERS": "2", "PATH": "/usr/bin:/bin"}
+    env = {"TMPDIR": str(tmp_path), "REMI_MAX_WORKERS": "2", "PATH": "/usr/bin:/bin"}
     for agent_id in ("agent-one", "agent-two"):
         run_hook("agent_policy.py", pre, "pre", env=env)
         run_hook("agent_policy.py", worker_event(session, agent_id, "SubagentStart"), "start", env=env)
@@ -258,7 +258,7 @@ def test_resumed_worker_does_not_free_other_slots(tmp_path):
 
 
 def test_explore_and_reviewer_allowed(tmp_path):
-    for agent in ("cw:explorer", "cw:reviewer"):
+    for agent in ("remi:explorer", "remi:reviewer"):
         payload = tool("Agent", subagent_type=agent, prompt="x")
         payload["session_id"] = tmp_path.name
         assert run_hook("agent_policy.py", payload, "pre").returncode == 0
@@ -364,7 +364,7 @@ def test_project_defined_agents_blocked(tmp_path):
         payload["session_id"] = tmp_path.name
         result = run_hook("agent_policy.py", payload, "pre")
         assert result.returncode == 2, agent
-        assert "not part of cw" in result.stderr
+        assert "not part of remi" in result.stderr
 
 
 # --- pipeline: worker stop and pre-review gates ------------------------------------
@@ -375,7 +375,7 @@ def pipeline_env(tmp_path: Path) -> dict:
 
 
 def start_worker(session: str, agent_id: str, env: dict) -> None:
-    pre = tool("Agent", subagent_type="cw:worker", prompt="x")
+    pre = tool("Agent", subagent_type="remi:worker", prompt="x")
     pre["session_id"] = session
     run_hook("agent_policy.py", pre, "pre", env=env)
     run_hook("agent_policy.py", worker_event(session, agent_id, "SubagentStart"), "start", env=env)
@@ -390,7 +390,7 @@ def worker_stop(repo: Path, session: str, agent_id: str) -> dict:
 def test_worker_gate_defers_tests_while_others_run(repo, tmp_path):
     (tmp_path / "state").mkdir()
     env = pipeline_env(tmp_path)
-    (repo / "pyproject.toml").write_text('[tool.cw]\ntest = "exit 3"\n')
+    (repo / "pyproject.toml").write_text('[tool.remi]\ntest = "exit 3"\n')
     (repo / "tests").mkdir()
     start_worker("deferred", "agent-one", env)
     start_worker("deferred", "agent-two", env)
@@ -401,7 +401,7 @@ def test_worker_gate_defers_tests_while_others_run(repo, tmp_path):
 def test_last_worker_runs_tests(repo, tmp_path):
     (tmp_path / "state").mkdir()
     env = pipeline_env(tmp_path)
-    (repo / "pyproject.toml").write_text('[tool.cw]\ntest = "exit 3"\n')
+    (repo / "pyproject.toml").write_text('[tool.remi]\ntest = "exit 3"\n')
     (repo / "tests").mkdir()
     start_worker("last", "agent-one", env)
     result = run_hook("quality.py", worker_stop(repo, "last", "agent-one"), "worker", env=env)
@@ -413,7 +413,7 @@ def test_review_refused_while_workers_run(repo, tmp_path):
     (tmp_path / "state").mkdir()
     env = pipeline_env(tmp_path)
     start_worker("busy", "agent-one", env)
-    payload = tool("Agent", cwd=repo, subagent_type="cw:reviewer", prompt="Review main...feat/x")
+    payload = tool("Agent", cwd=repo, subagent_type="remi:reviewer", prompt="Review main...feat/x")
     payload["session_id"] = "busy"
     result = run_hook("quality.py", payload, "review", env=env)
     assert result.returncode == 2
@@ -423,9 +423,9 @@ def test_review_refused_while_workers_run(repo, tmp_path):
 def test_review_runs_fix_then_gate(repo, tmp_path):
     (tmp_path / "state").mkdir()
     env = pipeline_env(tmp_path)
-    (repo / "pyproject.toml").write_text('[tool.cw]\nfix = "touch fixed.marker"\ntest = "test -f fixed.marker"\n')
+    (repo / "pyproject.toml").write_text('[tool.remi]\nfix = "touch fixed.marker"\ntest = "test -f fixed.marker"\n')
     (repo / "tests").mkdir()
-    payload = tool("Agent", cwd=repo, subagent_type="cw:reviewer", prompt="Review main...feat/x")
+    payload = tool("Agent", cwd=repo, subagent_type="remi:reviewer", prompt="Review main...feat/x")
     payload["session_id"] = "green"
     result = run_hook("quality.py", payload, "review", env=env)
     assert result.returncode == 0, result.stderr
@@ -435,9 +435,9 @@ def test_review_runs_fix_then_gate(repo, tmp_path):
 def test_review_refused_when_tests_red(repo, tmp_path):
     (tmp_path / "state").mkdir()
     env = pipeline_env(tmp_path)
-    (repo / "pyproject.toml").write_text('[tool.cw]\nfix = "true"\ntest = "exit 3"\n')
+    (repo / "pyproject.toml").write_text('[tool.remi]\nfix = "true"\ntest = "exit 3"\n')
     (repo / "tests").mkdir()
-    payload = tool("Agent", cwd=repo, subagent_type="cw:reviewer", prompt="Review main...feat/x")
+    payload = tool("Agent", cwd=repo, subagent_type="remi:reviewer", prompt="Review main...feat/x")
     payload["session_id"] = "red"
     result = run_hook("quality.py", payload, "review", env=env)
     assert result.returncode == 2
@@ -446,7 +446,7 @@ def test_review_refused_when_tests_red(repo, tmp_path):
 
 def test_default_worker_cap_is_three(tmp_path):
     session = f"default-cap-{tmp_path.name}"
-    pre = tool("Agent", subagent_type="cw:worker", prompt="x")
+    pre = tool("Agent", subagent_type="remi:worker", prompt="x")
     pre["session_id"] = session
     env = {"TMPDIR": str(tmp_path), "PATH": "/usr/bin:/bin"}
     for _ in range(3):
@@ -513,7 +513,7 @@ def test_plain_pr_title_allowed(repo, title):
 def test_plan_subagent_redirected_to_orchestrator(tmp_path):
     payload = tool("Agent", subagent_type="Plan", prompt="design it")
     payload["session_id"] = tmp_path.name
-    result = run_hook("agent_policy.py", payload, "pre", env={"CW_STATE_DIR": str(tmp_path), "PATH": "/usr/bin:/bin"})
+    result = run_hook("agent_policy.py", payload, "pre", env={"REMI_STATE_DIR": str(tmp_path), "PATH": "/usr/bin:/bin"})
     assert result.returncode == 2
     assert "designs the plan itself" in result.stderr
     assert "ExitPlanMode" in result.stderr
@@ -563,7 +563,7 @@ def test_claude_md_multiedit(tmp_path):
 
 
 def test_claude_md_limit_configurable():
-    env = {"CW_CLAUDE_MD_MAX_LINES": "50", "PATH": "/usr/bin:/bin"}
+    env = {"REMI_CLAUDE_MD_MAX_LINES": "50", "PATH": "/usr/bin:/bin"}
     result = run_hook("claude_md.py", tool("Write", file_path="CLAUDE.md", content=lines_of(51)), env=env)
     assert result.returncode == 2
 
@@ -608,16 +608,16 @@ def test_commit_gate_blocks_long_claude_md(repo):
 def test_builtin_explore_redirected_to_cheap_explorer(tmp_path):
     payload = tool("Agent", subagent_type="Explore", prompt="find the settings module")
     payload["session_id"] = tmp_path.name
-    result = run_hook("agent_policy.py", payload, "pre", env={"CW_STATE_DIR": str(tmp_path), "PATH": "/usr/bin:/bin"})
+    result = run_hook("agent_policy.py", payload, "pre", env={"REMI_STATE_DIR": str(tmp_path), "PATH": "/usr/bin:/bin"})
     assert result.returncode == 2
-    assert "cw:explorer" in result.stderr
+    assert "remi:explorer" in result.stderr
     assert "Grep and Read yourself" in result.stderr
 
 
 def test_explorer_does_not_take_a_worker_slot(tmp_path):
-    env = {"CW_STATE_DIR": str(tmp_path), "CW_MAX_WORKERS": "1", "PATH": "/usr/bin:/bin"}
-    explorer = tool("Agent", subagent_type="cw:explorer", prompt="x")
-    worker = tool("Agent", subagent_type="cw:worker", prompt="x")
+    env = {"REMI_STATE_DIR": str(tmp_path), "REMI_MAX_WORKERS": "1", "PATH": "/usr/bin:/bin"}
+    explorer = tool("Agent", subagent_type="remi:explorer", prompt="x")
+    worker = tool("Agent", subagent_type="remi:worker", prompt="x")
     for payload in (explorer, worker):
         payload["session_id"] = "slots"
     assert run_hook("agent_policy.py", explorer, "pre", env=env).returncode == 0

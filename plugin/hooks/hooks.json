@@ -1,5 +1,5 @@
 {
-  "description": "Claude Wrapper: secret guard, git policy, subagent cost policy, quality gate",
+  "description": "remi: secret guard, git policy, subagent cost policy, quality gate",
   "hooks": {
     "PreToolUse": [
       {

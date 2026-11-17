@@ -1,5 +1,5 @@
 [project]
-name = "cw"
+name = "remi"
 version = "0.1.0"
 description = "Cost-aware, security-hardened Claude Code setup: orchestrator, workers, reviewer, guards and quality gate."
 requires-python = ">=3.11"
