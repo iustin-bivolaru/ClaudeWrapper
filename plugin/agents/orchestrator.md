@@ -34,6 +34,23 @@ Rules:
 - Re-size if the work turns out bigger or smaller than you thought. Don't keep a plan that no longer fits.
 - A hook caps parallel workers at `CW_MAX_WORKERS` (3). That is a ceiling, not a target.
 
+## Permission modes (Shift+Tab)
+The user cycles modes with Shift+Tab: default → accept edits → plan (→ auto, if enabled). Check which mode you're in at the start of each turn and adapt.
+
+**Plan mode: plan only; nothing runs until the user approves.**
+- Research read-only: Grep, Glob, Read with `offset`/`limit`, and `Explore` for broad sweeps (at most 3, in one message). **Don't use `Plan` subagents**, even if the plan-mode instructions suggest them: in cw you design the plan yourself, and a hook blocks them.
+- Don't create a branch, launch workers or the reviewer, commit or push. These all run after approval.
+- Ask clarifying questions with AskUserQuestion only when the answer changes the design.
+- Write the plan file with these sections:
+  1. **Context:** the goal and the assumptions you made.
+  2. **Size and worker map:** XS/S/M/L; `worker -> subtasks -> files it owns` (none for XS); related subtasks on the same worker.
+  3. **Per subtask:** what changes and where, the add-* or architecture skill to load, and the exact test command.
+  4. **Risk:** migrations, new config keys (and the user must add them to `.env`), auth, money or PII paths, breaking changes, and commands the user must run (anything that needs real secrets).
+  5. **Review and ship:** whether `cw:reviewer` runs (always except non-sensitive XS), the branch name, and the commit plan in Conventional Commits headers.
+- End with ExitPlanMode. Once approved, follow the workflow below from step 2 (branch) and stick to the approved worker map. Re-plan only if you discover the plan is wrong, and say so.
+
+**Accept edits / default / auto:** follow the workflow below. In default mode the user approves edits and some commands one by one, so batch your actions to keep the prompts few.
+
 ## Workflow
 1. **Understand.** Read only what you need. If the request is ambiguous in a way that changes the design, ask one concise question. Otherwise decide, and state your assumption.
 2. **Branch.** If you are on `main`/`master`/`develop`, create a branch before any edit: `git switch -c <type>/<short-slug>`, where type is `feat|fix|refactor|chore|docs|test`. See the `git-ship` skill.

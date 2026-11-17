@@ -30,7 +30,7 @@ Interactive sessions start with the cw hamster (set `CW_NO_BANNER=1` to hide it)
  ▗█▖ ▗█▖   cw
  ▟▀███▀▙   orchestrator opus/medium · workers sonnet/medium 1–3 by size · reviewer opus/medium
  ▜█████▛   sandbox on · secrets guarded · branch feat/x
-  ▘▘ ▝▝
+  ▘▘ ▝▝    shift+tab cycles modes (plan · accept edits · default)
 ```
 
 ```bash
@@ -38,6 +38,7 @@ cd ~/work/some-client-repo
 cw                           # interactive, orchestrator on Opus
 cw -c                        # continue the last session
 cw -p "fix the failing test in tests/test_fx.py"
+cw --plan                    # start in plan mode (same as --permission-mode plan)
 cw --effort high            # think harder on a complex task (default: medium)
 cw --model sonnet            # cheaper orchestrator for simple tasks
 CW_MAX_WORKERS=2 cw          # tighter parallelism
@@ -45,6 +46,18 @@ cw mcp list                  # subcommands pass straight through to claude
 ```
 
 The status line shows the model, the branch (with a warning when you are on `main`), the session cost in $, and how full the context is.
+
+## Modes (Shift+Tab)
+
+`cw` is the normal interactive Claude Code, so **Shift+Tab cycles the permission modes** just as in `claude`: default → accept edits → plan (→ auto, if your account has it). The "skip all permissions" mode is disabled on purpose.
+
+| Mode | What the orchestrator does |
+|---|---|
+| **Plan** | Researches read-only (Grep/Read, and up to 3 `Explore` subagents), asks only questions that change the design, and writes a plan: context and assumptions, size and worker map, per-subtask skills and test commands, risks (migrations, new `.env` keys, auth, money or PII paths), and the review and ship plan with Conventional Commit headers. It creates no branch, starts no workers and doesn't commit until you approve. `Plan` subagents are blocked: the orchestrator designs the plan itself. |
+| **Accept edits / auto** | Runs the full pipeline without asking for each edit. |
+| **Default** | The same pipeline, but you approve edits and some commands one by one. The orchestrator batches its actions to keep the prompts few. |
+
+Start in a mode with `cw --plan`, `cw --permission-mode acceptEdits`, or `CW_PERMISSION_MODE=plan` (also allowed in `~/.config/cw/config`; values: `manual`, `acceptEdits`, `plan`, `auto`).
 
 ## Configuration: model and effort per role
 
@@ -54,7 +67,7 @@ The status line shows the model, the branch (with a warning when you are on `mai
 | Worker | `CW_WORKER_MODEL` = `sonnet` | `CW_WORKER_EFFORT` = `medium` | |
 | Reviewer | `CW_REVIEWER_MODEL` = `opus` | `CW_REVIEWER_EFFORT` = `medium` | |
 
-Plus `CW_MAX_WORKERS` (`3`) and `CW_NO_BANNER`. Effort is one of `low`, `medium`, `high`, `xhigh` or `max`. Precedence is **CLI flag > environment > config file > default**. To make a setting persistent, put it in `~/.config/cw/config`:
+Plus `CW_MAX_WORKERS` (`3`), `CW_PERMISSION_MODE` (starting mode) and `CW_NO_BANNER`. Effort is one of `low`, `medium`, `high`, `xhigh` or `max`. Precedence is **CLI flag > environment > config file > default**. To make a setting persistent, put it in `~/.config/cw/config`:
 
 ```ini
 # ~/.config/cw/config  (only CW_* keys are read; the file is parsed, never executed)

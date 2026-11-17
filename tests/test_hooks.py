@@ -359,7 +359,7 @@ def test_commit_gate_blocks_single_letters(repo):
 
 
 def test_project_defined_agents_blocked(tmp_path):
-    for agent in ("layering-reviewer", "migration-reviewer", "Plan"):
+    for agent in ("layering-reviewer", "migration-reviewer", "agent-prompt-reviewer"):
         payload = tool("Agent", subagent_type=agent, prompt="x")
         payload["session_id"] = tmp_path.name
         result = run_hook("agent_policy.py", payload, "pre")
@@ -508,3 +508,12 @@ def test_plain_pr_title_allowed(repo, title):
     git(repo, "switch", "-qc", "feat/x")
     command = f"gh pr create --base main --title '{title}' --body-file /tmp/body.md"
     assert run_hook("guard.py", tool("Bash", cwd=repo, command=command)).returncode == 0
+
+
+def test_plan_subagent_redirected_to_orchestrator(tmp_path):
+    payload = tool("Agent", subagent_type="Plan", prompt="design it")
+    payload["session_id"] = tmp_path.name
+    result = run_hook("agent_policy.py", payload, "pre", env={"CW_STATE_DIR": str(tmp_path), "PATH": "/usr/bin:/bin"})
+    assert result.returncode == 2
+    assert "designs the plan itself" in result.stderr
+    assert "ExitPlanMode" in result.stderr

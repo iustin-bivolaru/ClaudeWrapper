@@ -134,6 +134,12 @@ def on_pre(payload: dict[str, Any]) -> int:
             f"subagent_type='{REDIRECT[agent_type]}' (Sonnet) for implementation, "
             "'Explore' for searching, or 'cw:reviewer' for review."
         )
+    if agent_type == "Plan":
+        block(
+            "in cw the orchestrator designs the plan itself, and 'Plan' subagents would run on the expensive "
+            "orchestrator model. Research with Explore (read-only, at most 3), then write the plan file and call "
+            "ExitPlanMode."
+        )
     if agent_type not in ALLOWED_AGENT_TYPES:
         block(
             f"subagent '{agent_type}' is not part of cw. Use only cw:worker (implementation), "
