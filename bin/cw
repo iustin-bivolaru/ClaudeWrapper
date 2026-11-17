@@ -8,7 +8,7 @@
 #   CW_ORCHESTRATOR_MODEL  (opus)    CW_ORCHESTRATOR_EFFORT (medium)   also: --model / --effort
 #   CW_WORKER_MODEL        (sonnet)  CW_WORKER_EFFORT       (medium)
 #   CW_REVIEWER_MODEL      (opus)    CW_REVIEWER_EFFORT     (medium)
-#   CW_MAX_WORKERS         (4)       CW_NO_BANNER           (unset)
+#   CW_MAX_WORKERS         (3)       CW_NO_BANNER           (unset)
 # Config file: ${XDG_CONFIG_HOME:-~/.config}/cw/config, with KEY=VALUE lines (only CW_* keys are read).
 set -euo pipefail
 
@@ -45,7 +45,7 @@ fi
 : "${CW_ORCHESTRATOR_MODEL:=opus}"  "${CW_ORCHESTRATOR_EFFORT:=medium}"
 : "${CW_WORKER_MODEL:=sonnet}"      "${CW_WORKER_EFFORT:=medium}"
 : "${CW_REVIEWER_MODEL:=opus}"      "${CW_REVIEWER_EFFORT:=medium}"
-: "${CW_MAX_WORKERS:=4}"
+: "${CW_MAX_WORKERS:=3}"
 export CW_ORCHESTRATOR_MODEL CW_ORCHESTRATOR_EFFORT CW_WORKER_MODEL CW_WORKER_EFFORT \
        CW_REVIEWER_MODEL CW_REVIEWER_EFFORT CW_MAX_WORKERS
 

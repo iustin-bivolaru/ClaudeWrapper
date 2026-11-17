@@ -441,3 +441,15 @@ def test_review_refused_when_tests_red(repo, tmp_path):
     result = run_hook("quality.py", payload, "review", env=env)
     assert result.returncode == 2
     assert "review is refused" in result.stderr
+
+
+def test_default_worker_cap_is_three(tmp_path):
+    session = f"default-cap-{tmp_path.name}"
+    pre = tool("Agent", subagent_type="cw:worker", prompt="x")
+    pre["session_id"] = session
+    env = {"TMPDIR": str(tmp_path), "PATH": "/usr/bin:/bin"}
+    for _ in range(3):
+        assert run_hook("agent_policy.py", pre, "pre", env=env).returncode == 0
+    result = run_hook("agent_policy.py", pre, "pre", env=env)
+    assert result.returncode == 2
+    assert "limit 3" in result.stderr

@@ -3,7 +3,7 @@
 
 * ``pre``  - PreToolUse on Agent: refuse expensive general-purpose subagents
              (they inherit the Opus orchestrator model) and refuse a new worker
-             when ``CW_MAX_WORKERS`` (default 4) are already running.
+             when ``CW_MAX_WORKERS`` (default 3) are already running.
 * ``start`` - SubagentStart: turn a pending reservation into an active slot
                keyed by the worker's ``agent_id``.
 * ``stop``  - SubagentStop: free that worker's slot.
@@ -46,12 +46,12 @@ def max_workers() -> int:
     """Return the configured parallel-worker limit.
 
     Returns:
-        Value of ``CW_MAX_WORKERS``, defaulting to 4.
+        Value of ``CW_MAX_WORKERS``, defaulting to 3.
     """
     try:
-        return max(1, int(os.environ.get("CW_MAX_WORKERS", "4")))
+        return max(1, int(os.environ.get("CW_MAX_WORKERS", "3")))
     except ValueError:
-        return 4
+        return 3
 
 
 @contextmanager

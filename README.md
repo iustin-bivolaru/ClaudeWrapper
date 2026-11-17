@@ -5,8 +5,8 @@ A cost-aware, security-hardened layer over Claude Code for client work in bankin
 
 | Piece | What it does |
 |---|---|
-| **Orchestrator** (`cw:orchestrator`, Opus) | The main session. Sizes each task (XS/S/M/L) and uses as few workers as the work allows: none for XS (it edits directly), 1 for S, 2–3 for M, up to 4 only for L. Related subtasks go to the same worker. It creates the branch, delegates, routes review fixes back to the owning workers, then commits, pushes and opens the PR. |
-| **Worker** (`cw:worker`, Sonnet) | Does the implementation. Usually one; up to 4 run in parallel for large, independent work, each owning its own files, and each later fixes the review findings for its files. Never commits. |
+| **Orchestrator** (`cw:orchestrator`, Opus) | The main session. Sizes each task (XS/S/M/L) and uses as few workers as the work allows: none for XS (it edits directly), 1 for S, 2 for M, 3 only for L. Related subtasks go to the same worker. It creates the branch, delegates, routes review fixes back to the owning workers, then commits, pushes and opens the PR. |
+| **Worker** (`cw:worker`, Sonnet) | Does the implementation. Usually one; up to 3 run in parallel for large, independent work, each owning its own files, and each later fixes the review findings for its files. Never commits. |
 | **Reviewer** (`cw:reviewer`, Opus, read-only) | Gets only a git range (`main...feat/x`) and no explanation, so it reviews the code cold. It applies the architecture skills' checklists when the diff touches those layers. |
 | **House-style skills** | `python-service-style` (layering, typing, logging, errors, async I/O; the only one preloaded in workers, the rest load on demand), `python-docstrings` (reST `:param:`/`:returns:`/`:raises:` docstrings on every public module, class, method and function), `pydantic-annotated` (DTOs and Settings use `Annotated[..., Field()]`, `SecretStr`, `Decimal` for money), `naming` (descriptive multi-word names: `snake_case` in Python, `kebab-case` for branches, URLs and CLI flags, never single letters), `git-ship` (branch → commit → push → PR). |
 | **Architecture skills** (loaded on demand by the orchestrator and reviewer) | `service-architecture` (layers, composition root, transactions, errors, outbox, plus a review checklist) and `agent-orchestration-architecture` (routing, hand-offs, entitlements, stream contract, prompt-injection boundaries, plus a review checklist). |
@@ -28,7 +28,7 @@ Interactive sessions start with the cw hamster (set `CW_NO_BANNER=1` to hide it)
 
 ```
  ▗█▖ ▗█▖   cw
- ▟▀███▀▙   orchestrator opus/medium · workers sonnet/medium 1–4 by size · reviewer opus/medium
+ ▟▀███▀▙   orchestrator opus/medium · workers sonnet/medium 1–3 by size · reviewer opus/medium
  ▜█████▛   sandbox on · secrets guarded · branch feat/x
   ▘▘ ▝▝
 ```
@@ -54,7 +54,7 @@ The status line shows the model, the branch (with a warning when you are on `mai
 | Worker | `CW_WORKER_MODEL` = `sonnet` | `CW_WORKER_EFFORT` = `medium` | |
 | Reviewer | `CW_REVIEWER_MODEL` = `opus` | `CW_REVIEWER_EFFORT` = `medium` | |
 
-Plus `CW_MAX_WORKERS` (`4`) and `CW_NO_BANNER`. Effort is one of `low`, `medium`, `high`, `xhigh` or `max`. Precedence is **CLI flag > environment > config file > default**. To make a setting persistent, put it in `~/.config/cw/config`:
+Plus `CW_MAX_WORKERS` (`3`) and `CW_NO_BANNER`. Effort is one of `low`, `medium`, `high`, `xhigh` or `max`. Precedence is **CLI flag > environment > config file > default**. To make a setting persistent, put it in `~/.config/cw/config`:
 
 ```ini
 # ~/.config/cw/config  (only CW_* keys are read; the file is parsed, never executed)
@@ -71,7 +71,7 @@ you: task ─▶ orchestrator: size it (XS/S/M/L), plan, worker map
              │
              ├─ XS ─▶ orchestrator edits directly ─────────────────────────────┐
              │                                                                  │
-             └─ S/M/L ─▶ 1–4 workers (related subtasks share a worker)          │
+             └─ S/M/L ─▶ 1–3 workers (related subtasks share a worker)          │
                           each edit:    ruff check --fix · ruff format · lint   │
                           worker done:  same on ITS files (+ tests if last)     │
                                         red ⇒ the worker keeps going            │
@@ -133,7 +133,7 @@ test = "uv run pytest -q -x -m 'not integration'"
 - Opus plans and Sonnet does the typing: implementation is delegated to workers.
 - Only `cw:worker`, `cw:reviewer` and `Explore` may run. A hook refuses everything else: `general-purpose`, which would inherit Opus, and any subagents a project defines in its `.claude/agents/`.
 - Searching goes to `Explore`, which is cheap.
-- **Task sizing.** XS changes are made directly by the orchestrator, with no worker and no Opus review unless the change is security-sensitive. S uses 1 worker, M 2–3, L up to 4. `CW_MAX_WORKERS` (4) is a hard ceiling, not a target. Related subtasks share one worker.
+- **Task sizing.** XS changes are made directly by the orchestrator, with no worker and no Opus review unless the change is security-sensitive. S uses 1 worker, M 2, L 3. `CW_MAX_WORKERS` (3) is a hard ceiling, not a target. Related subtasks share one worker.
 - **Lean workers.** Only `python-service-style` is preloaded. Other skills load when the brief asks for them. Briefs pass along facts the orchestrator already found, so workers don't search again.
 - **No duplicate checks.** Hooks lint on edit, test when a worker stops, and run everything at commit. The orchestrator doesn't rerun them in between. Slots are tracked per agent id, so a worker resumed for review fixes is never counted twice.
 - Review fixes go back to the worker that already has the context (`SendMessage`), not to a fresh one. The Opus reviewer runs a second time only if it found critical or high issues.

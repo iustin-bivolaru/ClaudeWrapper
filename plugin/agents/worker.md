@@ -1,6 +1,6 @@
 ---
 name: worker
-description: Implementation worker. Use for any code change the orchestrator delegates - one or more related subtasks with explicit file ownership, plus later review fixes for those files. Usually one; up to 4 in parallel for large, independent work.
+description: Implementation worker. Use for any code change the orchestrator delegates - one or more related subtasks with explicit file ownership, plus later review fixes for those files. Usually one; up to 3 in parallel for large, independent work.
 model: sonnet
 effort: medium
 disallowedTools: Agent
