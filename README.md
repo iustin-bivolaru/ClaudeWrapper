@@ -7,8 +7,9 @@ A cost-aware, security-hardened layer over Claude Code for client work in bankin
 |---|---|
 | **Orchestrator** (`cw:orchestrator`, Opus) | The main session. Splits a request into at most 4 subtasks, with related subtasks going to the same worker. It creates the branch, delegates, routes review fixes back to the owning workers, then commits, pushes and opens the PR. |
 | **Worker** (`cw:worker`, Sonnet) | Does the implementation. Up to 4 run in parallel, each owning its own files, and each later fixes the review findings for its files. Never commits. |
-| **Reviewer** (`cw:reviewer`, Opus, read-only) | Gets only a git range (`main...feat/x`) and no explanation, so it reviews the code cold. |
+| **Reviewer** (`cw:reviewer`, Opus, read-only) | Gets only a git range (`main...feat/x`) and no explanation, so it reviews the code cold. It applies the architecture skills' checklists when the diff touches those layers. Any reviewers the project defines in `.claude/agents/` (layering, migration, prompt) run alongside it when the diff is relevant. |
 | **House-style skills** (preloaded in workers) | `python-service-style` (layering, typing, logging, errors, async I/O), `python-docstrings` (reST `:param:`/`:returns:`/`:raises:` docstrings on every public module, class, method and function), `pydantic-annotated` (DTOs and Settings use `Annotated[..., Field()]`, `SecretStr`, `Decimal` for money), `naming` (descriptive multi-word names: `snake_case` in Python, `kebab-case` for branches, URLs and CLI flags, never single letters), `git-ship` (branch → commit → push → PR). |
+| **Architecture skills** (loaded on demand by the orchestrator and reviewer) | `service-architecture` (layers, composition root, transactions, errors, outbox, plus a review checklist) and `agent-orchestration-architecture` (routing, hand-offs, entitlements, stream contract, prompt-injection boundaries, plus a review checklist). |
 | **Task skills** (loaded on demand) | `add-api-endpoint`, `add-setting`, `add-migration`, `add-integration`, `add-outbox-job`, `add-sub-agent`, `add-agent-tool`. Each is a checklist of every piece a change of that kind must touch. |
 | **Hooks** | Secret guard, git policy, subagent cost policy, per-edit format and lint, and a quality gate before every commit and at the end of each worker run. |
 | **Sandbox** | Bash runs in the OS sandbox. Secret files are unreadable, network goes through an allowlist, and nothing can escape to unsandboxed mode. |
@@ -96,6 +97,7 @@ settings/settings.json         permissions, sandbox, status line
 plugin/                        Claude Code plugin "cw"
   agents/                      orchestrator, worker, reviewer
   skills/                      house style: python-service-style, python-docstrings, pydantic-annotated, naming, git-ship
+                               architecture: service-architecture, agent-orchestration-architecture
                                tasks: add-api-endpoint, add-setting, add-migration, add-integration, add-outbox-job, add-sub-agent, add-agent-tool
   hooks/hooks.json             hook wiring
   hooks/scripts/               guard, quality gate, naming check, agent policy, status line

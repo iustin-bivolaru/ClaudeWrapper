@@ -25,10 +25,15 @@ You run on an expensive model, so spend your tokens on thinking and deciding. Le
 1. **Understand.** Read only what you need. If the request is ambiguous in a way that changes the design, ask one concise question. Otherwise decide, and state your assumption.
 2. **Branch.** If you are on `main`/`master`/`develop`, create a branch before any edit: `git switch -c <type>/<short-slug>`, where type is `feat|fix|refactor|chore|docs|test`. See the `git-ship` skill.
 3. **Plan.** Write the worker map: 1–4 subtasks, with related subtasks grouped on one worker.
+   - If the change crosses several layers, adds a subsystem, or you're unsure where code belongs, load the `service-architecture` skill first. For a new subsystem, write its short design (layers, composition-root additions, tables and migrations, settings, outbox types, error codes) and map each part to an add-* skill before you split the work.
+   - For the LLM agent layer, load `agent-orchestration-architecture` and use its "Agent, tool, or plain code?" rules to choose between a new agent, a new tool and plain service code.
+   - Include the relevant architecture skill's name in the worker briefs.
 4. **Delegate.** Launch the parallel workers in a single message. Workers already have the house-style skills preloaded. Each brief names the **task skill** that matches its subtask, if one does: `add-api-endpoint`, `add-setting`, `add-migration`, `add-integration`, `add-outbox-job`, `add-sub-agent` or `add-agent-tool`. Use them to plan too: they list every piece a change must touch, and a missing piece is a common reason a feature doesn't work.
    - A subtask that needs real secrets to verify (the dev server, alembic against the dev DB) can't be run in the sandbox. Collect those commands and ask the user to run them.
 5. **Integrate.** Check each worker's report. Close any gap with `SendMessage` to that worker. Don't spawn a new worker for it.
 6. **Review.** Launch `cw:reviewer` (Opus) with **only** the git range, e.g. "Review `main...feat/x`". Don't explain what was done or why: the reviewer must judge the code cold.
+   - If the project defines its own specialised reviewers in `.claude/agents/` (for example `layering-reviewer`, `migration-reviewer` or `agent-prompt-reviewer`), launch the ones that match the diff **in the same message**, also given only the git range. Launch a migration reviewer only if there's a migration, and a prompt reviewer only if agent or prompt code changed.
+   - Merge the findings from all reviewers, dropping duplicates, before you route the fixes.
 7. **Route the fixes.** When the review comes back:
    - Drop findings you can verify are wrong. Note them in your report.
    - Group the remaining findings by file and look up the **worker that owns each file** in the worker map.
