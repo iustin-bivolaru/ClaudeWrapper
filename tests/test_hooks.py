@@ -151,6 +151,8 @@ def test_commit_after_branch_switch_allowed(repo):
         "git commit --no-verify -m x",
         "git reset --hard HEAD~1",
         "git clean -fd",
+        "gh repo create acme/x --public --source . --push",
+        "gh repo edit acme/x --visibility public",
     ],
 )
 def test_dangerous_git_blocked(repo, command):
@@ -161,6 +163,12 @@ def test_dangerous_git_blocked(repo, command):
 def test_push_feature_branch_allowed(repo):
     git(repo, "switch", "-qc", "feat/x")
     for command in ("git push -u origin HEAD", "git push --force-with-lease origin feat/x"):
+        assert run_hook("guard.py", tool("Bash", cwd=repo, command=command)).returncode == 0, command
+
+
+def test_private_repo_create_allowed(repo):
+    git(repo, "switch", "-qc", "feat/x")
+    for command in ("gh repo create acme/x --private --source . --push", "gh repo create acme/x --internal"):
         assert run_hook("guard.py", tool("Bash", cwd=repo, command=command)).returncode == 0, command
 
 
