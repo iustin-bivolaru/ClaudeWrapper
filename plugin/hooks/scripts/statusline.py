@@ -7,6 +7,9 @@ import json
 import subprocess
 import sys
 
+CLEAR_HINT_PERCENT = 60
+"""Context usage at which the status line suggests ``/clear`` once the current task is done."""
+
 
 def branch(cwd: str) -> str:
     """Return the current git branch, or an empty string.
@@ -49,7 +52,8 @@ def main() -> int:
     warn = " ⚠ on protected branch" if br in {"main", "master"} else ""
     parts = [f"🧠 {model}", f"🌿 {br or '-'}{warn}", f"💰 ${cost:.2f}"]
     if isinstance(ctx, (int, float)):
-        parts.append(f"ctx {ctx:.0f}%")
+        hint = " · /clear when done" if ctx >= CLEAR_HINT_PERCENT else ""
+        parts.append(f"ctx {ctx:.0f}%{hint}")
     print("  │  ".join(parts))
     return 0
 
