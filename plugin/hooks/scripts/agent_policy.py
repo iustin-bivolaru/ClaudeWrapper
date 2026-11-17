@@ -38,6 +38,8 @@ REDIRECT = {
     "general-purpose": "cw:worker",
     "claude": "cw:worker",
 }
+ALLOWED_AGENT_TYPES = frozenset({"cw:worker", "cw:reviewer", "Explore"})
+"""Only the wrapper's own agents (and the cheap built-in Explore) may run; project-defined agents are refused."""
 
 
 def max_workers() -> int:
@@ -131,6 +133,11 @@ def on_pre(payload: dict[str, Any]) -> int:
             f"'{agent_type}' runs on the expensive orchestrator model. Use "
             f"subagent_type='{REDIRECT[agent_type]}' (Sonnet) for implementation, "
             "'Explore' for searching, or 'cw:reviewer' for review."
+        )
+    if agent_type not in ALLOWED_AGENT_TYPES:
+        block(
+            f"subagent '{agent_type}' is not part of cw. Use only cw:worker (implementation), "
+            "cw:reviewer (review) or Explore (search)."
         )
     if not agent_type.endswith("worker"):
         return ALLOW

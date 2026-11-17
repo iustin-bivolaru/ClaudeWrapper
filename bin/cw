@@ -31,4 +31,23 @@ wrapper_args=(
 # Default to Opus for the orchestrator unless the user picked a model.
 case " $* " in *" --model "*|*" --model="*) ;; *) wrapper_args+=(--model opus) ;; esac
 
+# The cw hamster: monochrome, interactive sessions only (silence with CW_NO_BANNER=1).
+print_banner() {
+  local branch
+  branch="$(git symbolic-ref --short -q HEAD 2>/dev/null || echo -)"
+  cat <<BANNER
+ ▗█▖ ▗█▖   cw
+ ▟▀███▀▙   orchestrator opus · workers sonnet ×${CW_MAX_WORKERS:-4} · reviewer opus
+ ▜█████▛   sandbox on · secrets guarded · branch ${branch}
+  ▘▘ ▝▝
+BANNER
+}
+is_print_mode=false
+for argument in "$@"; do
+  case "$argument" in -p|--print|--bg|--background) is_print_mode=true ;; esac
+done
+if [ -t 1 ] && [ "$is_print_mode" = false ] && [ -z "${CW_NO_BANNER:-}" ]; then
+  print_banner
+fi
+
 exec claude "${wrapper_args[@]}" "$@"

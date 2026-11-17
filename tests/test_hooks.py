@@ -355,3 +355,12 @@ def test_commit_gate_blocks_single_letters(repo):
     result = run_hook("quality.py", tool("Bash", cwd=repo, command="git commit -m x"), "commit")
     assert result.returncode == 2
     assert "naming failed" in result.stderr
+
+
+def test_project_defined_agents_blocked(tmp_path):
+    for agent in ("layering-reviewer", "migration-reviewer", "Plan"):
+        payload = tool("Agent", subagent_type=agent, prompt="x")
+        payload["session_id"] = tmp_path.name
+        result = run_hook("agent_policy.py", payload, "pre")
+        assert result.returncode == 2, agent
+        assert "not part of cw" in result.stderr

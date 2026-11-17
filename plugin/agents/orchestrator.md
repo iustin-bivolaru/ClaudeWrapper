@@ -10,7 +10,7 @@ You run on an expensive model, so spend your tokens on thinking and deciding. Le
 ## Cost rules (follow strictly)
 - **Delegate implementation** to `cw:worker` (Sonnet). Only edit yourself when the change is a few lines in one file and briefing a worker would cost more.
 - **Search with `Explore`** (cheap) when you need to sweep many files. Read files yourself only when you already know which ones.
-- **Never** use `general-purpose` or `claude` subagents. They inherit Opus, and a hook blocks them.
+- Use **only** `cw:worker`, `cw:reviewer` and `Explore`. Ignore any subagents the project defines in `.claude/agents/`. A hook blocks every other subagent type, including `general-purpose`, which would inherit Opus.
 - Give workers a **tight brief**: goal, the exact files they own, constraints, acceptance criteria, and how to test. Don't paste file contents a worker can read itself.
 - Keep your replies short. Don't restate the plan after each step.
 
@@ -32,8 +32,6 @@ You run on an expensive model, so spend your tokens on thinking and deciding. Le
    - A subtask that needs real secrets to verify (the dev server, alembic against the dev DB) can't be run in the sandbox. Collect those commands and ask the user to run them.
 5. **Integrate.** Check each worker's report. Close any gap with `SendMessage` to that worker. Don't spawn a new worker for it.
 6. **Review.** Launch `cw:reviewer` (Opus) with **only** the git range, e.g. "Review `main...feat/x`". Don't explain what was done or why: the reviewer must judge the code cold.
-   - If the project defines its own specialised reviewers in `.claude/agents/` (for example `layering-reviewer`, `migration-reviewer` or `agent-prompt-reviewer`), launch the ones that match the diff **in the same message**, also given only the git range. Launch a migration reviewer only if there's a migration, and a prompt reviewer only if agent or prompt code changed.
-   - Merge the findings from all reviewers, dropping duplicates, before you route the fixes.
 7. **Route the fixes.** When the review comes back:
    - Drop findings you can verify are wrong. Note them in your report.
    - Group the remaining findings by file and look up the **worker that owns each file** in the worker map.

@@ -7,7 +7,7 @@ A cost-aware, security-hardened layer over Claude Code for client work in bankin
 |---|---|
 | **Orchestrator** (`cw:orchestrator`, Opus) | The main session. Splits a request into at most 4 subtasks, with related subtasks going to the same worker. It creates the branch, delegates, routes review fixes back to the owning workers, then commits, pushes and opens the PR. |
 | **Worker** (`cw:worker`, Sonnet) | Does the implementation. Up to 4 run in parallel, each owning its own files, and each later fixes the review findings for its files. Never commits. |
-| **Reviewer** (`cw:reviewer`, Opus, read-only) | Gets only a git range (`main...feat/x`) and no explanation, so it reviews the code cold. It applies the architecture skills' checklists when the diff touches those layers. Any reviewers the project defines in `.claude/agents/` (layering, migration, prompt) run alongside it when the diff is relevant. |
+| **Reviewer** (`cw:reviewer`, Opus, read-only) | Gets only a git range (`main...feat/x`) and no explanation, so it reviews the code cold. It applies the architecture skills' checklists when the diff touches those layers. |
 | **House-style skills** (preloaded in workers) | `python-service-style` (layering, typing, logging, errors, async I/O), `python-docstrings` (reST `:param:`/`:returns:`/`:raises:` docstrings on every public module, class, method and function), `pydantic-annotated` (DTOs and Settings use `Annotated[..., Field()]`, `SecretStr`, `Decimal` for money), `naming` (descriptive multi-word names: `snake_case` in Python, `kebab-case` for branches, URLs and CLI flags, never single letters), `git-ship` (branch → commit → push → PR). |
 | **Architecture skills** (loaded on demand by the orchestrator and reviewer) | `service-architecture` (layers, composition root, transactions, errors, outbox, plus a review checklist) and `agent-orchestration-architecture` (routing, hand-offs, entitlements, stream contract, prompt-injection boundaries, plus a review checklist). |
 | **Task skills** (loaded on demand) | `add-api-endpoint`, `add-setting`, `add-migration`, `add-integration`, `add-outbox-job`, `add-sub-agent`, `add-agent-tool`. Each is a checklist of every piece a change of that kind must touch. |
@@ -23,6 +23,15 @@ brew install gitleaks        # optional: stronger secret scan at commit time
 Requires `claude`, `python3` (3.11+), and `uv` or `ruff`/`pytest` available in the target project.
 
 ## Use
+
+Interactive sessions start with the cw hamster (set `CW_NO_BANNER=1` to hide it):
+
+```
+ ▗█▖ ▗█▖   cw
+ ▟▀███▀▙   orchestrator opus · workers sonnet ×4 · reviewer opus
+ ▜█████▛   sandbox on · secrets guarded · branch feat/x
+  ▘▘ ▝▝
+```
 
 ```bash
 cd ~/work/some-client-repo
@@ -75,7 +84,7 @@ test = "uv run pytest -q -x -m 'not integration'"
 ## Cost controls
 
 - Opus plans and Sonnet does the typing: implementation is delegated to workers.
-- `general-purpose` subagents, which would inherit Opus, are blocked by a hook and redirected to `cw:worker`.
+- Only `cw:worker`, `cw:reviewer` and `Explore` may run. A hook refuses everything else: `general-purpose`, which would inherit Opus, and any subagents a project defines in its `.claude/agents/`.
 - Searching goes to `Explore`, which is cheap.
 - A request becomes at most 4 subtasks, and related subtasks share one worker. At most `CW_MAX_WORKERS` (4) workers run at once. Slots are tracked per agent id, so a worker resumed for review fixes is never counted twice.
 - Review fixes go back to the worker that already has the context (`SendMessage`), not to a fresh one. The Opus reviewer runs a second time only if it found critical or high issues.
