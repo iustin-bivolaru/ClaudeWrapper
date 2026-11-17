@@ -76,7 +76,7 @@ remi --plan "$(remi onboard --print-prompt)"
 | Mode | What the orchestrator does |
 |---|---|
 | **Plan** | Researches read-only (Grep/Read itself, and `remi:explorer` only for broad sweeps), asks only questions that change the design, and writes a plan: context and assumptions, size and worker map, per-subtask skills and test commands, risks (migrations, new `.env` keys, auth, money or PII paths), and the review and ship plan with Conventional Commit headers. It creates no branch, starts no workers and doesn't commit until you approve. `Plan` and the built-in `Explore` subagents are blocked: the orchestrator designs the plan itself, and Explore would run on Opus. |
-| **Accept edits / auto** | Runs the full pipeline without asking for each edit. |
+| **Accept edits / auto** | Runs the full pipeline without asking for each edit. M and L tasks still pause once, for you to approve the worker map before any worker starts. |
 | **Default** | The same pipeline, but you approve edits and some commands one by one. The orchestrator batches its actions to keep the prompts few. |
 
 Start in a mode with `remi --plan`, `remi --permission-mode acceptEdits`, or `REMI_PERMISSION_MODE=plan` (also allowed in `~/.config/remi/config`; values: `manual`, `acceptEdits`, `plan`, `auto`).
@@ -104,6 +104,7 @@ Agent frontmatter is static, so `remi` writes a copy of the plugin with the work
 
 ```
 you: task ─▶ orchestrator: size it (XS/S/M/L), plan, worker map
+             │  (M/L: waits for you to approve the worker map)
              │
              ├─ XS ─▶ orchestrator edits directly ─────────────────────────────┐
              │                                                                  │

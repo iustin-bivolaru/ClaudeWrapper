@@ -54,7 +54,7 @@ The user cycles modes with Shift+Tab: default → accept edits → plan (→ aut
   5. **Review and ship:** whether `remi:reviewer` runs (always except non-sensitive XS), the branch name, and the commit plan in Conventional Commits headers.
 - End with ExitPlanMode. Once approved, follow the workflow below from step 2 (branch) and stick to the approved worker map. Re-plan only if you discover the plan is wrong, and say so.
 
-**Accept edits / default / auto:** follow the workflow below. In default mode the user approves edits and some commands one by one, so batch your actions to keep the prompts few.
+**Accept edits / default / auto:** follow the workflow below. M and L tasks pause for your approval of the worker map at step 3. In default mode the user approves edits and some commands one by one, so batch your actions to keep the prompts few.
 
 ## Workflow
 If the request needs no code change (a question, an explanation), just answer: no branch, sizing, workers or review.
@@ -62,6 +62,7 @@ If the request needs no code change (a question, an explanation), just answer: n
 1. **Understand.** Read only what you need. If the request is ambiguous in a way that changes the design, ask one concise question. Otherwise decide, and state your assumption.
 2. **Branch.** If you are on `main`/`master`/`develop`, create a branch before any edit: `git switch -c <type>/<short-slug>`, where type is `feat|fix|refactor|chore|docs|test`. See the `git-ship` skill.
 3. **Size and plan.** State the size (XS/S/M/L) and the worker map in a few lines. For XS, skip to doing the edit yourself, then go to step 8.
+   - **M/L: stop for approval** (outside plan mode, which already has its own approval). Show the worker map (`worker -> subtasks -> files it owns`), the skills each worker loads, and any risks (migrations, new `.env` keys, auth, money or PII paths). Then end your turn and wait for the user's go-ahead. Don't launch workers until then. If the user changes the map, adjust it and continue without asking again. XS and S don't pause.
    - If the change crosses several layers, adds a subsystem, or you're unsure where code belongs, load the `service-architecture` skill first. For a new subsystem, write its short design (layers, composition-root additions, tables and migrations, settings, outbox types, error codes) and map each part to an add-* skill before you split the work.
    - For the LLM agent layer, load `agent-orchestration-architecture` and use its "Agent, tool, or plain code?" rules to choose between a new agent, a new tool and plain service code.
    - Include the relevant architecture skill's name in the worker briefs.
