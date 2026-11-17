@@ -114,9 +114,9 @@ def state_dir(payload: dict[str, Any]) -> Path:
         payload: The hook payload; its ``session_id`` scopes the directory.
 
     Returns:
-        An existing directory under the system temp folder.
+        An existing directory under ``REMI_STATE_DIR`` (default: ``$TMPDIR/remi``).
     """
-    base = Path(os.environ.get("TMPDIR", "/tmp")) / "remi"
+    base = Path(os.environ.get("REMI_STATE_DIR") or Path(os.environ.get("TMPDIR", "/tmp")) / "remi")
     session = re.sub(r"[^\w-]", "_", str(payload.get("session_id") or "default"))
     path = base / session
     path.mkdir(parents=True, exist_ok=True)

@@ -33,6 +33,9 @@ command -v python3 >/dev/null || { echo "remi: 'python3' is required by the hook
 case "${1:-}" in
   mcp|config|doctor|update|upgrade|install|plugin|plugins|setup-token|migrate-installer|agents|attach|logs|stop|rm|auth|login|logout)
     exec claude "$@" ;;
+  onboard)  # remi's own read-only readiness report for an existing project
+    shift
+    exec python3 "$REMI_HOME/plugin/hooks/scripts/onboard.py" "$@" ;;
 esac
 
 # --- configuration -------------------------------------------------------------

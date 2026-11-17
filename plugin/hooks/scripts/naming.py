@@ -48,7 +48,7 @@ class ShortNameFinder(ast.NodeVisitor):
     def __init__(self, file_name: str) -> None:
         """Initialise an empty violation list for ``file_name``."""
         self.file_name = file_name
-        self.violations: list[str] = []
+        self.violations: list[tuple[int, str]] = []
 
     def _report(self, identifier: str, node: ast.AST, kind: str) -> None:
         """Record a violation if ``identifier`` is a single letter.
@@ -60,9 +60,7 @@ class ShortNameFinder(ast.NodeVisitor):
         """
         if len(identifier) == 1 and identifier not in ALLOWED_NAMES:
             line_number = getattr(node, "lineno", 0)
-            self.violations.append(
-                f"{self.file_name}:{line_number}: single-letter {kind} '{identifier}' - use a descriptive name"
-            )
+            self.violations.append((line_number, f"single-letter {kind} '{identifier}' - use a descriptive name"))
 
     def visit_Assign(self, node: ast.Assign) -> None:
         """Skip type-variable declarations, check every other assignment."""
@@ -105,14 +103,14 @@ class ShortNameFinder(ast.NodeVisitor):
             self._report(node.asname, node, "import alias")
 
 
-def find_short_names(path: Path) -> list[str]:
-    """Return the single-letter identifier violations in one Python file.
+def short_name_violations(path: Path) -> list[tuple[int, str]]:
+    """Return the single-letter identifiers in one Python file, with their line numbers.
 
     Args:
         path: Python source file.
 
     Returns:
-        Violation messages, or an empty list if the file is clean or can't be parsed.
+        ``(line_number, message)`` pairs; empty if the file is clean or can't be parsed.
     """
     try:
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
@@ -121,6 +119,18 @@ def find_short_names(path: Path) -> list[str]:
     finder = ShortNameFinder(str(path))
     finder.visit(tree)
     return finder.violations
+
+
+def find_short_names(path: Path) -> list[str]:
+    """Return the single-letter identifier violations in one Python file.
+
+    Args:
+        path: Python source file.
+
+    Returns:
+        ``path:line: message`` strings, or an empty list if the file is clean or can't be parsed.
+    """
+    return [f"{path}:{line_number}: {message}" for line_number, message in short_name_violations(path)]
 
 
 def main(arguments: list[str]) -> int:
