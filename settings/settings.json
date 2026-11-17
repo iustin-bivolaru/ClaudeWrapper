@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "env": {
+    "CW_MAX_WORKERS": "4"
+  },
+  "statusLine": {
+    "type": "command",
+    "command": "python3 \"$CW_HOME/plugin/hooks/scripts/statusline.py\"",
+    "padding": 0
+  },
+  "permissions": {
+    "disableBypassPermissionsMode": "disable",
+    "allow": [
+      "Bash(git status *)", "Bash(git diff *)", "Bash(git log *)", "Bash(git show *)",
+      "Bash(git branch *)", "Bash(git switch *)", "Bash(git checkout -b *)",
+      "Bash(git add *)", "Bash(git commit *)", "Bash(git push *)", "Bash(git pull --rebase *)",
+      "Bash(git fetch *)", "Bash(git rev-parse *)", "Bash(git restore --staged *)",
+      "Bash(uv run *)", "Bash(uv sync *)", "Bash(uv add *)", "Bash(pytest *)", "Bash(ruff *)",
+      "Bash(gh pr view *)", "Bash(gh pr create *)"
+    ],
+    "ask": [
+      "WebFetch"
+    ],
+    "deny": [
+      "Read(**/.env)", "Read(**/.env.local)", "Read(**/.env.*.local)",
+      "Read(**/.env.prod*)", "Read(**/.env.dev*)", "Read(**/.env.stag*)",
+      "Read(**/.env.test*)", "Read(**/.env.uat*)", "Read(**/.env.qa*)", "Read(**/.envrc)",
+      "Read(**/*.pem)", "Read(**/*.key)", "Read(**/*.p12)", "Read(**/*.pfx)",
+      "Read(**/*.jks)", "Read(**/*.keystore)", "Read(**/*.tfstate)", "Read(**/terraform.tfvars)",
+      "Read(**/credentials.json)", "Read(**/service-account*.json)",
+      "Read(~/.ssh/**)", "Read(~/.aws/**)", "Read(~/.azure/**)", "Read(~/.config/gcloud/**)",
+      "Read(~/.kube/**)", "Read(~/.docker/config.json)", "Read(~/.netrc)", "Read(~/.pgpass)",
+      "Read(~/.git-credentials)", "Read(~/.npmrc)", "Read(~/.pypirc)",
+      "Edit(**/.env)", "Edit(**/.env.local)", "Edit(**/.env.*.local)",
+      "Edit(**/.env.prod*)", "Edit(**/.env.dev*)", "Edit(**/.env.stag*)",
+      "Edit(**/.env.test*)", "Edit(**/.env.uat*)", "Edit(**/.env.qa*)", "Edit(**/.envrc)",
+      "Edit(**/*.pem)", "Edit(**/*.key)", "Edit(~/.ssh/**)", "Edit(~/.aws/**)",
+      "Bash(printenv *)", "Bash(sudo *)"
+    ]
+  },
+  "sandbox": {
+    "enabled": true,
+    "failIfUnavailable": true,
+    "autoAllowBashIfSandboxed": true,
+    "allowUnsandboxedCommands": false,
+    "excludedCommands": ["git push *", "git pull *", "git fetch *", "gh *"],
+    "filesystem": {
+      "denyRead": [
+        "~/**/.env", "~/**/.env.local", "~/**/.env.*.local",
+        "~/**/.env.prod*", "~/**/.env.dev*", "~/**/.env.stag*",
+        "~/**/.env.test*", "~/**/.env.uat*", "~/**/.env.qa*", "~/**/.envrc",
+        "~/**/*.pem", "~/**/*.key", "~/**/*.p12", "~/**/*.pfx", "~/**/*.jks",
+        "~/**/*.tfstate", "~/**/terraform.tfvars",
+        "~/.ssh", "~/.aws", "~/.azure", "~/.config/gcloud", "~/.kube",
+        "~/.docker/config.json", "~/.netrc", "~/.pgpass", "~/.git-credentials",
+        "~/.npmrc", "~/.pypirc", "~/Library/Keychains"
+      ]
+    },
+    "network": {
+      "allowedDomains": [
+        "pypi.org", "files.pythonhosted.org",
+        "github.com", "api.github.com", "codeload.github.com", "*.githubusercontent.com",
+        "registry.npmjs.org", "astral.sh"
+      ]
+    }
+  }
+}

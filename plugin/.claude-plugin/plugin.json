@@ -1,0 +1,7 @@
+{
+  "name": "cw",
+  "version": "0.1.0",
+  "author": { "name": "NextTech" },
+  "license": "UNLICENSED",
+  "description": "Cost-aware orchestrator/worker/reviewer setup with secret guards, git branch workflow and a quality gate for banking-grade projects."
+}

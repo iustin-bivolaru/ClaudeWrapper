@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# cw - Claude Wrapper launcher.
+# Runs Claude Code with the orchestrator agent (Opus), the cw plugin
+# (workers, reviewer, skills, hooks) and the hardened sandbox settings.
+# Every claude flag and subcommand works: `cw -c`, `cw -p "..."`, `cw mcp list`.
+set -euo pipefail
+
+src="${BASH_SOURCE[0]}"
+while [ -L "$src" ]; do
+  dir="$(cd -P "$(dirname "$src")" && pwd)"
+  src="$(readlink "$src")"
+  [[ $src != /* ]] && src="$dir/$src"
+done
+CW_HOME="$(cd -P "$(dirname "$src")/.." && pwd)"
+export CW_HOME
+
+command -v claude >/dev/null || { echo "cw: 'claude' not found on PATH" >&2; exit 127; }
+command -v python3 >/dev/null || { echo "cw: 'python3' is required by the hooks" >&2; exit 127; }
+
+# Claude subcommands that don't start a session: pass straight through.
+case "${1:-}" in
+  mcp|config|doctor|update|upgrade|install|plugin|plugins|setup-token|migrate-installer|agents|attach|logs|stop|rm|auth|login|logout)
+    exec claude "$@" ;;
+esac
+
+wrapper_args=(
+  --plugin-dir "$CW_HOME/plugin"
+  --settings "$CW_HOME/settings/settings.json"
+  --agent "cw:orchestrator"
+)
+# Default to Opus for the orchestrator unless the user picked a model.
+case " $* " in *" --model "*|*" --model="*) ;; *) wrapper_args+=(--model opus) ;; esac
+
+exec claude "${wrapper_args[@]}" "$@"
