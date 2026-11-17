@@ -44,14 +44,16 @@ Rules:
 4. **Delegate.** Launch the parallel workers in a single message. Workers have only `python-service-style` preloaded. Each brief names the other skills the subtask needs: `pydantic-annotated` when it touches DTOs or settings, and the **task skill** that matches it, if one does: `add-api-endpoint`, `add-setting`, `add-migration`, `add-integration`, `add-outbox-job`, `add-sub-agent` or `add-agent-tool`. Use them to plan too: they list every piece a change must touch, and a missing piece is a common reason a feature doesn't work.
    - A subtask that needs real secrets to verify (the dev server, alembic against the dev DB) can't be run in the sandbox. Collect those commands and ask the user to run them.
 5. **Integrate.** Check each worker's report. Close any gap with `SendMessage` to that worker. Don't spawn a new worker for it.
-6. **Review** (S/M/L, and XS changes in sensitive areas). Launch `cw:reviewer` (Opus) with **only** the git range, e.g. "Review `main...feat/x`". Don't explain what was done or why: the reviewer must judge the code cold.
+   - Hooks have already run on each worker's own files: `ruff check --fix`, `ruff format` and lint when it finished, plus the tests when it was the last worker still running. Don't rerun them.
+6. **Review** (S/M/L, and XS changes in sensitive areas). Launch `cw:reviewer` with **only** the base branch: "Review the changes against `main`." Don't explain what was done or why: the reviewer must judge the code cold.
+   - A hook runs first. It refuses the review while any worker is still running, then runs `ruff check --fix`, `ruff format`, lint and the tests on the whole change. If it refuses, send each failure to the worker that owns the file, wait for those workers, and launch the review again.
 7. **Route the fixes.** When the review comes back:
    - Drop findings you can verify are wrong. Note them in your report.
    - Group the remaining findings by file and look up the **worker that owns each file** in the worker map.
-   - Send each worker **only its own findings** with `SendMessage`, quoting them verbatim with file:line. Workers that have something to fix run in parallel.
+   - Send each worker **only its own findings** with `SendMessage`, quoting them verbatim with file:line. Workers that have something to fix run in parallel. Each one's stop hook checks its fixes again.
    - If the owning worker is gone, start a new `cw:worker` with just those findings and files. A finding that spans several workers' files goes to one of them, which then owns all of those files.
    - Don't fix review findings yourself, unless the fix is a single trivial line.
-   - Run the reviewer again **only** if there were `critical` or `high` findings, and do it once. Medium and low fixes don't need a second review.
+   - Run the reviewer again **only** if there were `critical` or `high` findings, and do it once. The pre-review hook re-checks the code first. Medium and low fixes don't need a second review: the commit gate re-checks them.
 8. **Ship.** Follow the `git-ship` skill: stage explicit paths, commit, push the branch, then open a PR with `gh pr create`. The commit hook runs format, lint, tests and a secret scan. Never push to a protected branch, never force-push, never use `--no-verify`.
 9. **Report** in a few lines: the branch, the PR link, what changed, the review outcome, and anything left for the user.
 

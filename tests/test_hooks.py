@@ -364,3 +364,80 @@ def test_project_defined_agents_blocked(tmp_path):
         result = run_hook("agent_policy.py", payload, "pre")
         assert result.returncode == 2, agent
         assert "not part of cw" in result.stderr
+
+
+# --- pipeline: worker stop and pre-review gates ------------------------------------
+
+
+def pipeline_env(tmp_path: Path) -> dict:
+    return {"TMPDIR": str(tmp_path / "state"), "PATH": "/usr/bin:/bin", "HOME": str(tmp_path)}
+
+
+def start_worker(session: str, agent_id: str, env: dict) -> None:
+    pre = tool("Agent", subagent_type="cw:worker", prompt="x")
+    pre["session_id"] = session
+    run_hook("agent_policy.py", pre, "pre", env=env)
+    run_hook("agent_policy.py", worker_event(session, agent_id, "SubagentStart"), "start", env=env)
+
+
+def worker_stop(repo: Path, session: str, agent_id: str) -> dict:
+    payload = worker_event(session, agent_id, "SubagentStop")
+    payload["cwd"] = str(repo)
+    return payload
+
+
+def test_worker_gate_defers_tests_while_others_run(repo, tmp_path):
+    (tmp_path / "state").mkdir()
+    env = pipeline_env(tmp_path)
+    (repo / "pyproject.toml").write_text('[tool.cw]\ntest = "exit 3"\n')
+    (repo / "tests").mkdir()
+    start_worker("deferred", "agent-one", env)
+    start_worker("deferred", "agent-two", env)
+    result = run_hook("quality.py", worker_stop(repo, "deferred", "agent-one"), "worker", env=env)
+    assert result.returncode == 0, result.stderr  # agent-two still running: tests wait for the review gate
+
+
+def test_last_worker_runs_tests(repo, tmp_path):
+    (tmp_path / "state").mkdir()
+    env = pipeline_env(tmp_path)
+    (repo / "pyproject.toml").write_text('[tool.cw]\ntest = "exit 3"\n')
+    (repo / "tests").mkdir()
+    start_worker("last", "agent-one", env)
+    result = run_hook("quality.py", worker_stop(repo, "last", "agent-one"), "worker", env=env)
+    assert result.returncode == 2
+    assert "Tests are red" in result.stderr
+
+
+def test_review_refused_while_workers_run(repo, tmp_path):
+    (tmp_path / "state").mkdir()
+    env = pipeline_env(tmp_path)
+    start_worker("busy", "agent-one", env)
+    payload = tool("Agent", cwd=repo, subagent_type="cw:reviewer", prompt="Review main...feat/x")
+    payload["session_id"] = "busy"
+    result = run_hook("quality.py", payload, "review", env=env)
+    assert result.returncode == 2
+    assert "still running" in result.stderr
+
+
+def test_review_runs_fix_then_gate(repo, tmp_path):
+    (tmp_path / "state").mkdir()
+    env = pipeline_env(tmp_path)
+    (repo / "pyproject.toml").write_text('[tool.cw]\nfix = "touch fixed.marker"\ntest = "test -f fixed.marker"\n')
+    (repo / "tests").mkdir()
+    payload = tool("Agent", cwd=repo, subagent_type="cw:reviewer", prompt="Review main...feat/x")
+    payload["session_id"] = "green"
+    result = run_hook("quality.py", payload, "review", env=env)
+    assert result.returncode == 0, result.stderr
+    assert (repo / "fixed.marker").exists()
+
+
+def test_review_refused_when_tests_red(repo, tmp_path):
+    (tmp_path / "state").mkdir()
+    env = pipeline_env(tmp_path)
+    (repo / "pyproject.toml").write_text('[tool.cw]\nfix = "true"\ntest = "exit 3"\n')
+    (repo / "tests").mkdir()
+    payload = tool("Agent", cwd=repo, subagent_type="cw:reviewer", prompt="Review main...feat/x")
+    payload["session_id"] = "red"
+    result = run_hook("quality.py", payload, "review", env=env)
+    assert result.returncode == 2
+    assert "review is refused" in result.stderr

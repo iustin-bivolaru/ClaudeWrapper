@@ -7,7 +7,12 @@ Modes (first CLI argument):
                file and report leftover lint (incl. missing docstrings).
 * ``commit`` - PreToolUse on Bash: before ``git commit`` scan the staged diff
                for secrets and run the full gate; block the commit on failure.
-* ``worker`` - SubagentStop: a worker may not finish while the gate is red.
+* ``worker`` - SubagentStop: ``ruff check --fix`` + ``ruff format`` on the files
+               this worker edited, then lint them; run the tests when no other
+               worker is still running. A worker may not finish while red.
+* ``review`` - PreToolUse on Agent: before ``cw:reviewer`` starts, every worker
+               must be done, and fix + format + lint + tests must pass on the
+               whole change. A red gate refuses the review.
 
 Commands are auto-detected (uv / .venv / PATH) and can be overridden per
 project in ``pyproject.toml``::
@@ -31,7 +36,8 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from _common import ALLOW, BLOCK, block, is_secret_path, project_dir, read_payload  # noqa: E402
+from _common import ALLOW, BLOCK, block, is_secret_path, project_dir, read_payload, state_dir  # noqa: E402
+from agent_policy import _slot_name, slots_locked  # noqa: E402
 from agent_policy import on_stop as release_worker_slot  # noqa: E402
 from naming import find_short_names  # noqa: E402
 
@@ -210,12 +216,14 @@ def changed_python_files(root: Path, *, staged_only: bool) -> list[Path]:
     Returns:
         Existing ``.py`` files, as absolute paths.
     """
-    command = (
-        "git diff --cached --name-only --diff-filter=ACMR"
-        if staged_only
-        else "git ls-files --modified --others --exclude-standard"
-    )
-    _, listing = run(command, root, timeout=30)
+    if staged_only:
+        _, listing = run("git diff --cached --name-only --diff-filter=ACMR", root, timeout=30)
+    else:
+        exit_code, tracked = run("git diff --name-only --diff-filter=ACMR HEAD", root, timeout=30)
+        if exit_code != 0:  # no commits yet
+            _, tracked = run("git diff --cached --name-only --diff-filter=ACMR", root, timeout=30)
+        _, untracked = run("git ls-files --others --exclude-standard", root, timeout=30)
+        listing = f"{tracked}\n{untracked}"
     candidates = (root / line.strip() for line in listing.splitlines() if line.strip().endswith(".py"))
     return sorted({candidate for candidate in candidates if candidate.is_file()})
 
@@ -270,19 +278,9 @@ def on_edit(payload: dict[str, Any]) -> int:
     path = Path(file_path)
     if path.suffix != ".py" or not path.is_file():
         return ALLOW
+    record_edit(payload, path)
     root = project_dir(payload)
-    problems: list[str] = []
-    ruff = python_tool(root, "ruff")
-    if ruff:
-        quoted = json.dumps(str(path))
-        run(f"{ruff} format --quiet {quoted}", root, timeout=60)
-        is_test = path.name.startswith("test_") or path.name == "conftest.py"
-        rules = f"{NAMING_RULES},{HOUSE_RULES}" if is_test else f"{DOCSTRING_RULES},{NAMING_RULES},{HOUSE_RULES}"
-        lint_command = f"{ruff} check --fix --quiet --output-format concise --extend-select {rules} {quoted}"
-        exit_code, lint_output = run(lint_command, root, timeout=60)
-        if exit_code != 0 and lint_output:
-            problems.append(lint_output)
-    problems += find_short_names(path)
+    problems = lint_files(root, [path], fix=True)
     if problems:
         print(
             f"Lint issues remain in {path.name}. Fix them now: public functions, methods and classes need "
@@ -292,6 +290,158 @@ def on_edit(payload: dict[str, Any]) -> int:
         )
         return BLOCK
     return ALLOW
+
+
+def lint_files(root: Path, files: list[Path], *, fix: bool) -> list[str]:
+    """Optionally autofix and format some files, then report what is still wrong.
+
+    The order is ``ruff check --fix``, then ``ruff format``, then a final ``ruff check``
+    with the house rules (docstrings, pep8-naming, logging, imports), then the
+    single-letter name check.
+
+    Args:
+        root: Project root.
+        files: Python files to process.
+        fix: Apply fixes and formatting before checking.
+
+    Returns:
+        Problem reports; empty when the files are clean.
+    """
+    existing = [file_path for file_path in files if file_path.suffix == ".py" and file_path.is_file()]
+    if not existing:
+        return []
+    problems: list[str] = []
+    ruff = python_tool(root, "ruff")
+    if ruff:
+        quoted = " ".join(json.dumps(str(file_path)) for file_path in existing)
+        if fix:
+            run(f"{ruff} check --fix --quiet {quoted}", root, timeout=120)
+            run(f"{ruff} format --quiet {quoted}", root, timeout=120)
+        non_test = [
+            json.dumps(str(file_path))
+            for file_path in existing
+            if not (file_path.name.startswith("test_") or file_path.name == "conftest.py")
+        ]
+        tests_only = [
+            json.dumps(str(file_path)) for file_path in existing if json.dumps(str(file_path)) not in non_test
+        ]
+        for selected, rules in (
+            (non_test, f"{DOCSTRING_RULES},{NAMING_RULES},{HOUSE_RULES}"),
+            (tests_only, f"{NAMING_RULES},{HOUSE_RULES}"),
+        ):
+            if not selected:
+                continue
+            exit_code, lint_output = run(
+                f"{ruff} check --quiet --output-format concise --extend-select {rules} {' '.join(selected)}",
+                root,
+                timeout=120,
+            )
+            if exit_code != 0 and lint_output:
+                problems.append(lint_output)
+    for file_path in existing:
+        problems += find_short_names(file_path)
+    return problems
+
+
+def _edits_log(payload: dict[str, Any]) -> Path:
+    """Return the file that lists what the current subagent has edited.
+
+    Args:
+        payload: Hook payload carrying ``agent_id``.
+
+    Returns:
+        Path of the per-agent edit log.
+    """
+    edits_directory = state_dir(payload) / "edits"
+    edits_directory.mkdir(exist_ok=True)
+    return edits_directory / f"{_slot_name(payload)}.txt"
+
+
+def record_edit(payload: dict[str, Any], path: Path) -> None:
+    """Remember that the current subagent edited ``path``.
+
+    The worker-stop gate then checks only that worker's own files. Edits made by the
+    orchestrator (with no ``agent_id``) aren't recorded.
+
+    Args:
+        payload: PostToolUse payload.
+        path: The edited file.
+    """
+    if not payload.get("agent_id"):
+        return
+    with _edits_log(payload).open("a", encoding="utf-8") as log_file:
+        log_file.write(f"{path.resolve()}\n")
+
+
+def edited_by_agent(payload: dict[str, Any]) -> list[Path]:
+    """Return the files the stopping subagent edited.
+
+    Args:
+        payload: SubagentStop payload carrying ``agent_id``.
+
+    Returns:
+        Unique file paths, possibly empty.
+    """
+    if not payload.get("agent_id"):
+        return []
+    log_path = _edits_log(payload)
+    if not log_path.is_file():
+        return []
+    return sorted({Path(line) for line in log_path.read_text(encoding="utf-8").splitlines() if line.strip()})
+
+
+def running_workers(payload: dict[str, Any], *, excluding_self: bool) -> int:
+    """Count the workers that are pending or still running in this session.
+
+    Args:
+        payload: Hook payload (session scope and, optionally, ``agent_id``).
+        excluding_self: Don't count the worker that sent ``payload``.
+
+    Returns:
+        The number of running or pending workers.
+    """
+    with slots_locked(payload) as (pending_directory, active_directory):
+        active_names = {entry.name for entry in active_directory.iterdir()}
+        if excluding_self:
+            active_names.discard(_slot_name(payload))
+        return len(active_names) + sum(1 for _ in pending_directory.iterdir())
+
+
+def run_steps(root: Path, wanted: set[str]) -> str | None:
+    """Run only some gate steps (for example just ``test`` and ``typecheck``).
+
+    Args:
+        root: Project root.
+        wanted: Names of the steps to run.
+
+    Returns:
+        Failure report, or None when they all passed.
+    """
+    for step, cmd in gate_commands(root):
+        if step not in wanted:
+            continue
+        exit_code, output = run(cmd, root)
+        if step == "test" and exit_code == 5:  # pytest: no tests collected
+            continue
+        if exit_code != 0:
+            return f"{step} failed (`{cmd}`):\n{tail(output)}"
+    return None
+
+
+def apply_project_fixes(root: Path, files: list[Path]) -> None:
+    """Apply autofix and formatting to the change before a full gate.
+
+    Uses ``[tool.cw] fix`` when the project sets it, otherwise ruff on the given files.
+
+    Args:
+        root: Project root.
+        files: Changed Python files.
+    """
+    override = load_overrides(root).get("fix")
+    if override:
+        run(override, root)
+        return
+    lint_files(root, files, fix=True)
 
 
 def luhn_ok(digits: str) -> bool:
@@ -399,24 +549,76 @@ def on_worker_stop(payload: dict[str, Any]) -> int:
 def _worker_gate(payload: dict[str, Any]) -> int:
     """Decide whether a stopping worker must keep going.
 
+    It fixes, formats and lints only the files this worker edited, so a worker is never
+    blocked by another worker's half-finished files. It runs the tests only when no
+    other worker is still running. Otherwise the pre-review gate runs them on the whole
+    change.
+
     Args:
         payload: SubagentStop payload.
 
     Returns:
-        Exit code; 2 when the quality gate is red.
+        Exit code; 2 when the worker's own gate is red.
     """
     if payload.get("stop_hook_active"):
-        return ALLOW  # already sent back once; let the orchestrator decide
+        return ALLOW  # already sent back once; the orchestrator decides what's next
     if not str(payload.get("agent_type", "")).endswith("worker"):
         return ALLOW
     root = project_dir(payload)
+    others_running = running_workers(payload, excluding_self=True) > 0
+    own_files = edited_by_agent(payload)
+    if not own_files and not others_running:
+        own_files = changed_python_files(root, staged_only=False)
+    problems = lint_files(root, own_files, fix=True)
+    if problems:
+        print(
+            "Your files still have lint problems (ruff --fix and format were already applied). Fix them:\n"
+            + tail("\n".join(problems), 40),
+            file=sys.stderr,
+        )
+        return BLOCK
+    if others_running:
+        return ALLOW
     _, status = run("git status --porcelain", root, timeout=30)
     if not status.strip():
         return ALLOW
+    failure = run_steps(root, {"typecheck", "test"})
+    if failure:
+        print(
+            "Tests are red. Fix them if the failure is in your files. If it's outside them, "
+            f"stop and report it to the orchestrator.\n{failure}",
+            file=sys.stderr,
+        )
+        return BLOCK
+    return ALLOW
+
+
+def on_review(payload: dict[str, Any]) -> int:
+    """Gate the reviewer: all workers are done and the whole change is green.
+
+    The steps are fix + format, then naming, format check, lint, typecheck and tests,
+    all on the whole uncommitted change.
+
+    Args:
+        payload: PreToolUse payload for the Agent tool.
+
+    Returns:
+        Exit code (blocking exits with 2 inside ``block``).
+    """
+    agent_type = str((payload.get("tool_input") or {}).get("subagent_type") or "")
+    if not agent_type.endswith("reviewer"):
+        return ALLOW
+    still_running = running_workers(payload, excluding_self=False)
+    if still_running:
+        block(f"{still_running} worker(s) still running. Wait until every worker has finished, then start the review.")
+    root = project_dir(payload)
+    apply_project_fixes(root, changed_python_files(root, staged_only=False))
     failure = run_gate(root, staged_only=False)
     if failure:
-        print(f"Quality gate is red - fix it before finishing.\n{failure}", file=sys.stderr)
-        return BLOCK
+        block(
+            "the change isn't green, so the review is refused. Send each failure to the worker that owns "
+            f"the file (SendMessage), then start the review again.\n{failure}"
+        )
     return ALLOW
 
 
@@ -431,7 +633,7 @@ def main() -> int:
         payload = read_payload()
     except ValueError:
         return BLOCK if mode == "commit" else ALLOW
-    handlers = {"edit": on_edit, "commit": on_commit, "worker": on_worker_stop}
+    handlers = {"edit": on_edit, "commit": on_commit, "worker": on_worker_stop, "review": on_review}
     handler = handlers.get(mode)
     return handler(payload) if handler else ALLOW
 

@@ -28,7 +28,7 @@ Interactive sessions start with the cw hamster (set `CW_NO_BANNER=1` to hide it)
 
 ```
  ▗█▖ ▗█▖   cw
- ▟▀███▀▙   orchestrator opus · workers sonnet 1–4 by size · reviewer opus
+ ▟▀███▀▙   orchestrator opus/medium · workers sonnet/medium 1–4 by size · reviewer opus/medium
  ▜█████▛   sandbox on · secrets guarded · branch feat/x
   ▘▘ ▝▝
 ```
@@ -38,12 +38,57 @@ cd ~/work/some-client-repo
 cw                           # interactive, orchestrator on Opus
 cw -c                        # continue the last session
 cw -p "fix the failing test in tests/test_fx.py"
+cw --effort high            # think harder on a complex task (default: medium)
 cw --model sonnet            # cheaper orchestrator for simple tasks
 CW_MAX_WORKERS=2 cw          # tighter parallelism
 cw mcp list                  # subcommands pass straight through to claude
 ```
 
 The status line shows the model, the branch (with a warning when you are on `main`), the session cost in $, and how full the context is.
+
+## Configuration: model and effort per role
+
+| Role | Model | Effort | Override |
+|---|---|---|---|
+| Orchestrator | `CW_ORCHESTRATOR_MODEL` = `opus` | `CW_ORCHESTRATOR_EFFORT` = `medium` | also `--model` / `--effort` |
+| Worker | `CW_WORKER_MODEL` = `sonnet` | `CW_WORKER_EFFORT` = `medium` | |
+| Reviewer | `CW_REVIEWER_MODEL` = `opus` | `CW_REVIEWER_EFFORT` = `medium` | |
+
+Plus `CW_MAX_WORKERS` (`4`) and `CW_NO_BANNER`. Effort is one of `low`, `medium`, `high`, `xhigh` or `max`. Precedence is **CLI flag > environment > config file > default**. To make a setting persistent, put it in `~/.config/cw/config`:
+
+```ini
+# ~/.config/cw/config  (only CW_* keys are read; the file is parsed, never executed)
+CW_REVIEWER_EFFORT=high
+CW_WORKER_MODEL=sonnet
+```
+
+Agent frontmatter is static, so `cw` writes a copy of the plugin with the worker and reviewer settings filled in, under `~/.cache/cw/plugin-<hash>`. Each different configuration gets its own copy, so two sessions with different settings never overwrite each other.
+
+## The pipeline
+
+```
+you: task ─▶ orchestrator: size it (XS/S/M/L), plan, worker map
+             │
+             ├─ XS ─▶ orchestrator edits directly ─────────────────────────────┐
+             │                                                                  │
+             └─ S/M/L ─▶ 1–4 workers (related subtasks share a worker)          │
+                          each edit:    ruff check --fix · ruff format · lint   │
+                          worker done:  same on ITS files (+ tests if last)     │
+                                        red ⇒ the worker keeps going            │
+                          ▼                                                     │
+              pre-review gate (hook): all workers finished?                     │
+                          ruff check --fix · ruff format · lint · tests on the  │
+                          whole change; red ⇒ review refused, fix via workers   │
+                          ▼                                                     │
+              cw:reviewer (no context, only "against main")                     │
+                          ▼                                                     │
+              findings ─▶ orchestrator ─▶ owning worker(s) fix (SendMessage)    │
+                          critical/high ⇒ one more review                       │
+                          ▼                                                     ▼
+              commit gate (hook): secret scan · naming · format · lint · tests
+                          ▼
+              push branch ─▶ gh pr create
+```
 
 ## Security layers (defence in depth)
 
@@ -59,15 +104,16 @@ The status line shows the model, the branch (with a warning when you are on `mai
 - No commits on `main`/`master`/`develop`/`release`/`production`. The agent creates `feat/…`, `fix/…` and similar branches.
 - No pushes to protected branches, no `--force` (only `--force-with-lease` on your own branch), no `--no-verify`.
 - Files are staged and committed in separate commands, so the gate checks exactly what gets committed.
-- The orchestrator commits with conventional messages, pushes with `git push -u origin HEAD`, and opens the PR with `gh pr create`.
+- The orchestrator commits with conventional messages, pushes with a standalone `git push origin HEAD`, and opens the PR with `gh pr create`.
 - **No Claude attribution.** The `attribution` settings are empty, and the guard blocks `Co-Authored-By: Claude` and "Generated with Claude Code" in commits and PRs. You are the only author.
 
 ## Quality gate
 
 | When | What runs |
 |---|---|
-| After every Edit/Write of a `.py` file | `ruff format` + `ruff check --fix` with the docstring, pep8-naming, no-f-strings-in-logs (`G004`) and no-relative-imports (`TID252`) rules, plus the single-letter-name check; leftover issues go back to the agent |
-| When a worker tries to finish (if the tree is dirty) | naming → format check → lint → tests; the worker keeps going while the gate is red |
+| After every Edit/Write of a `.py` file | `ruff check --fix` + `ruff format`, then lint with the docstring, pep8-naming, no-f-strings-in-logs (`G004`) and no-relative-imports (`TID252`) rules, plus the single-letter-name check; leftover issues go back to the agent |
+| When a worker tries to finish | `ruff check --fix` + `ruff format` + lint + naming on **the files that worker edited**, so it is never blocked by another worker's half-finished files. Tests run only if it is the last worker still running. The worker keeps going while red. |
+| Before `cw:reviewer` starts | Every worker must be finished. Then `ruff check --fix` + `ruff format` on the whole change, followed by naming → format check → lint → typecheck → tests. If anything is red, the review is refused and the failures go to the workers. |
 | Before `git commit` | secret scan → naming (staged files) → format check → lint → tests; the commit is refused on failure |
 
 Tools are found automatically (`.venv/bin`, then `uv run`, then `PATH`, then `uvx ruff`). For a `package.json`-only project, the gate uses the npm scripts `format:check`, `lint`, `typecheck` and `test`. To override per project:
@@ -75,6 +121,7 @@ Tools are found automatically (`.venv/bin`, then `uv run`, then `PATH`, then `uv
 ```toml
 # pyproject.toml of the target project
 [tool.cw]
+fix = "uv run ruff check --fix . && uv run ruff format ."   # applied before the pre-review gate
 format = "uv run ruff format --check src tests"
 lint = "uv run ruff check src tests"
 typecheck = "uv run mypy src"

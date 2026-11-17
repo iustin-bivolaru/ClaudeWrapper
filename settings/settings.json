@@ -5,9 +5,6 @@
     "pr": ""
   },
   "includeCoAuthoredBy": false,
-  "env": {
-    "CW_MAX_WORKERS": "4"
-  },
   "statusLine": {
     "type": "command",
     "command": "python3 \"$CW_HOME/plugin/hooks/scripts/statusline.py\"",

@@ -33,8 +33,10 @@ git commit -m "<type>(<scope>): <imperative summary, ≤ 72 chars>" -m "<why, an
 
 ## 3. Push
 ```bash
-git push -u origin HEAD
+git push origin HEAD
 ```
+- Run it **on its own**: no `&&`, no pipe (`| tail`), no `-u`. A bare `git push` runs outside the sandbox with your credentials. Chained or piped commands, and `-u` (which writes `.git/config`), get blocked by the sandbox.
+- `gh pr create` uses `--head` explicitly, so the branch doesn't need upstream tracking.
 If the remote has diverged on your own branch: `git pull --rebase origin <branch>`, rerun tests, push again (`--force-with-lease` only on your own feature branch, and only after a rebase you did).
 
 ## 4. Open the pull request
