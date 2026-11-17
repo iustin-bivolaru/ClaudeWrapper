@@ -38,8 +38,8 @@ REDIRECT = {
     "general-purpose": "cw:worker",
     "claude": "cw:worker",
 }
-ALLOWED_AGENT_TYPES = frozenset({"cw:worker", "cw:reviewer", "Explore"})
-"""Only the wrapper's own agents (and the cheap built-in Explore) may run; project-defined agents are refused."""
+ALLOWED_AGENT_TYPES = frozenset({"cw:worker", "cw:reviewer", "cw:explorer"})
+"""Only the wrapper's own agents (the explorer runs on Haiku; the built-in Explore inherits the expensive session model) may run; project-defined agents are refused."""
 
 
 def max_workers() -> int:
@@ -132,18 +132,24 @@ def on_pre(payload: dict[str, Any]) -> int:
         block(
             f"'{agent_type}' runs on the expensive orchestrator model. Use "
             f"subagent_type='{REDIRECT[agent_type]}' (Sonnet) for implementation, "
-            "'Explore' for searching, or 'cw:reviewer' for review."
+            "'cw:explorer' (Haiku) for broad searches, or 'cw:reviewer' for review."
         )
     if agent_type == "Plan":
         block(
             "in cw the orchestrator designs the plan itself, and 'Plan' subagents would run on the expensive "
-            "orchestrator model. Research with Explore (read-only, at most 3), then write the plan file and call "
+            "orchestrator model. Research with Grep/Read yourself, or cw:explorer for broad sweeps, then write the plan file and call "
             "ExitPlanMode."
+        )
+    if agent_type == "Explore":
+        block(
+            "the built-in 'Explore' runs on the session's model (Opus), not a cheap one. For a targeted lookup, use "
+            "Grep and Read yourself: starting any subagent costs about 20k tokens. For a broad sweep across many "
+            "directories, use subagent_type='cw:explorer' (Haiku, read-only)."
         )
     if agent_type not in ALLOWED_AGENT_TYPES:
         block(
             f"subagent '{agent_type}' is not part of cw. Use only cw:worker (implementation), "
-            "cw:reviewer (review) or Explore (search)."
+            "cw:reviewer (review) or cw:explorer (broad search)."
         )
     if not agent_type.endswith("worker"):
         return ALLOW

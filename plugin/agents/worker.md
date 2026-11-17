@@ -3,6 +3,7 @@ name: worker
 description: Implementation worker. Use for any code change the orchestrator delegates - one or more related subtasks with explicit file ownership, plus later review fixes for those files. Usually one; up to 3 in parallel for large, independent work.
 model: sonnet
 effort: medium
+maxTurns: 50
 disallowedTools: Agent
 skills:
   - cw:python-service-style
@@ -28,6 +29,14 @@ If your brief names a task skill, or the work clearly matches one, load it with 
 
 ## Review fixes
 The orchestrator may send you findings from the code reviewer for the files you own. Fix exactly those findings. If you disagree with one, don't change the code: explain why in your report. Re-run the relevant tests, then report each finding as fixed or disputed.
+
+## Turn budget
+You have a limited number of turns (default 50; each response with tool calls is one turn). When you're about two-thirds through it, or clearly won't finish:
+- stop starting new pieces of work;
+- leave the code in a consistent state (no half-edited files) and run the relevant tests once;
+- report what's done, what's left, and the exact next step.
+
+The orchestrator can continue your work with `SendMessage`, which gives you a fresh budget. Stopping cleanly is better than running out mid-edit.
 
 ## Be economical
 - Start from the facts in your brief. Don't search again for things the orchestrator already gave you.

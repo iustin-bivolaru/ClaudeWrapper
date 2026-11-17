@@ -258,7 +258,7 @@ def test_resumed_worker_does_not_free_other_slots(tmp_path):
 
 
 def test_explore_and_reviewer_allowed(tmp_path):
-    for agent in ("Explore", "cw:reviewer"):
+    for agent in ("cw:explorer", "cw:reviewer"):
         payload = tool("Agent", subagent_type=agent, prompt="x")
         payload["session_id"] = tmp_path.name
         assert run_hook("agent_policy.py", payload, "pre").returncode == 0
@@ -603,3 +603,23 @@ def test_commit_gate_blocks_long_claude_md(repo):
     result = run_hook("quality.py", tool("Bash", cwd=repo, command="git commit -m 'docs: add claude.md'"), "commit")
     assert result.returncode == 2
     assert "CLAUDE.md has 250 lines (limit 200)" in result.stderr
+
+
+def test_builtin_explore_redirected_to_cheap_explorer(tmp_path):
+    payload = tool("Agent", subagent_type="Explore", prompt="find the settings module")
+    payload["session_id"] = tmp_path.name
+    result = run_hook("agent_policy.py", payload, "pre", env={"CW_STATE_DIR": str(tmp_path), "PATH": "/usr/bin:/bin"})
+    assert result.returncode == 2
+    assert "cw:explorer" in result.stderr
+    assert "Grep and Read yourself" in result.stderr
+
+
+def test_explorer_does_not_take_a_worker_slot(tmp_path):
+    env = {"CW_STATE_DIR": str(tmp_path), "CW_MAX_WORKERS": "1", "PATH": "/usr/bin:/bin"}
+    explorer = tool("Agent", subagent_type="cw:explorer", prompt="x")
+    worker = tool("Agent", subagent_type="cw:worker", prompt="x")
+    for payload in (explorer, worker):
+        payload["session_id"] = "slots"
+    assert run_hook("agent_policy.py", explorer, "pre", env=env).returncode == 0
+    assert run_hook("agent_policy.py", explorer, "pre", env=env).returncode == 0
+    assert run_hook("agent_policy.py", worker, "pre", env=env).returncode == 0

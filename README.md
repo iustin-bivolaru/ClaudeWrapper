@@ -7,6 +7,7 @@ A cost-aware, security-hardened layer over Claude Code for client work in bankin
 |---|---|
 | **Orchestrator** (`cw:orchestrator`, Opus) | The main session. Sizes each task (XS/S/M/L) and uses as few workers as the work allows: none for XS (it edits directly), 1 for S, 2 for M, 3 only for L. Related subtasks go to the same worker. It creates the branch, delegates, routes review fixes back to the owning workers, then commits, pushes and opens the PR. |
 | **Worker** (`cw:worker`, Sonnet) | Does the implementation. Usually one; up to 3 run in parallel for large, independent work, each owning its own files, and each later fixes the review findings for its files. Never commits. |
+| **Explorer** (`cw:explorer`, Haiku, read-only) | Cheap search for broad sweeps across many files. It answers with file paths and line numbers, never whole files. |
 | **Reviewer** (`cw:reviewer`, Opus, read-only) | Gets only a git range (`main...feat/x`) and no explanation, so it reviews the code cold. It applies the architecture skills' checklists when the diff touches those layers. |
 | **House-style skills** | `python-service-style` (layering, typing, logging, errors, async I/O; the only one preloaded in workers, the rest load on demand), `python-docstrings` (reST `:param:`/`:returns:`/`:raises:` docstrings on every public module, class, method and function), `pydantic-annotated` (DTOs and Settings use `Annotated[..., Field()]`, `SecretStr`, `Decimal` for money), `naming` (descriptive multi-word names: `snake_case` in Python, `kebab-case` for branches, URLs and CLI flags, never single letters), `git-ship` (branch → commit → push → PR), `writing-prs` (a plain, readable title, a body built from facts: what, why, how it was verified, risk and rollout, config and migrations, commits; no client data or attribution; kept current as the branch changes). |
 | **Architecture skills** (loaded on demand by the orchestrator and reviewer) | `service-architecture` (layers, composition root, transactions, errors, outbox, plus a review checklist) and `agent-orchestration-architecture` (routing, hand-offs, entitlements, stream contract, prompt-injection boundaries, plus a review checklist). |
@@ -53,7 +54,7 @@ The status line shows the model, the branch (with a warning when you are on `mai
 
 | Mode | What the orchestrator does |
 |---|---|
-| **Plan** | Researches read-only (Grep/Read, and up to 3 `Explore` subagents), asks only questions that change the design, and writes a plan: context and assumptions, size and worker map, per-subtask skills and test commands, risks (migrations, new `.env` keys, auth, money or PII paths), and the review and ship plan with Conventional Commit headers. It creates no branch, starts no workers and doesn't commit until you approve. `Plan` subagents are blocked: the orchestrator designs the plan itself. |
+| **Plan** | Researches read-only (Grep/Read itself, and `cw:explorer` only for broad sweeps), asks only questions that change the design, and writes a plan: context and assumptions, size and worker map, per-subtask skills and test commands, risks (migrations, new `.env` keys, auth, money or PII paths), and the review and ship plan with Conventional Commit headers. It creates no branch, starts no workers and doesn't commit until you approve. `Plan` and the built-in `Explore` subagents are blocked: the orchestrator designs the plan itself, and Explore would run on Opus. |
 | **Accept edits / auto** | Runs the full pipeline without asking for each edit. |
 | **Default** | The same pipeline, but you approve edits and some commands one by one. The orchestrator batches its actions to keep the prompts few. |
 
@@ -66,8 +67,9 @@ Start in a mode with `cw --plan`, `cw --permission-mode acceptEdits`, or `CW_PER
 | Orchestrator | `CW_ORCHESTRATOR_MODEL` = `opus` | `CW_ORCHESTRATOR_EFFORT` = `medium` | also `--model` / `--effort` |
 | Worker | `CW_WORKER_MODEL` = `sonnet` | `CW_WORKER_EFFORT` = `medium` | |
 | Reviewer | `CW_REVIEWER_MODEL` = `opus` | `CW_REVIEWER_EFFORT` = `medium` | |
+| Explorer | `CW_EXPLORER_MODEL` = `haiku` | `CW_EXPLORER_EFFORT` = `low` | |
 
-Plus `CW_MAX_WORKERS` (`3`), `CW_PERMISSION_MODE` (starting mode) and `CW_NO_BANNER`. Effort is one of `low`, `medium`, `high`, `xhigh` or `max`. Precedence is **CLI flag > environment > config file > default**. To make a setting persistent, put it in `~/.config/cw/config`:
+Turn limits per agent: `CW_WORKER_MAX_TURNS` (`50`), `CW_REVIEWER_MAX_TURNS` (`25`) and `CW_EXPLORER_MAX_TURNS` (`15`). The orchestrator has none: you drive the main session. Plus `CW_MAX_WORKERS` (`3`), `CW_PERMISSION_MODE` (starting mode) and `CW_NO_BANNER`. Effort is one of `low`, `medium`, `high`, `xhigh` or `max`. Precedence is **CLI flag > environment > config file > default**. To make a setting persistent, put it in `~/.config/cw/config`:
 
 ```ini
 # ~/.config/cw/config  (only CW_* keys are read; the file is parsed, never executed)
@@ -153,8 +155,9 @@ Every `CLAUDE.md` / `CLAUDE.local.md`, at any depth, stays at or under **200 lin
 ## Cost controls
 
 - Opus plans and Sonnet does the typing: implementation is delegated to workers.
-- Only `cw:worker`, `cw:reviewer` and `Explore` may run. A hook refuses everything else: `general-purpose`, which would inherit Opus, and any subagents a project defines in its `.claude/agents/`.
-- Searching goes to `Explore`, which is cheap.
+- Only `cw:worker`, `cw:reviewer` and `cw:explorer` may run. A hook refuses everything else: `general-purpose`, `Plan` and the built-in `Explore`, which all inherit Opus, and any subagents a project defines in its `.claude/agents/`.
+- **Searching:** the orchestrator greps and reads targeted ranges itself, because starting any subagent costs about 20k tokens of context. Broad sweeps go to `cw:explorer`, which runs on Haiku. A measured search cost $0.0018, while the built-in Explore would run on Opus.
+- **Turn limits:** workers 50, reviewer 25, explorer 15. A worker that hits its limit stops with a partial result, and the orchestrator continues it with `SendMessage` (which gives it a fresh budget) or re-plans. Workers are told to wind down cleanly at about two-thirds of their budget.
 - **Task sizing.** XS changes are made directly by the orchestrator, with no worker and no Opus review unless the change is security-sensitive. S uses 1 worker, M 2, L 3. `CW_MAX_WORKERS` (3) is a hard ceiling, not a target. Related subtasks share one worker.
 - **Lean workers.** Only `python-service-style` is preloaded. Other skills load when the brief asks for them. Briefs pass along facts the orchestrator already found, so workers don't search again.
 - **No duplicate checks.** Hooks lint on edit, test when a worker stops, and run everything at commit. The orchestrator doesn't rerun them in between. Slots are tracked per agent id, so a worker resumed for review fixes is never counted twice.
@@ -175,7 +178,7 @@ Every `CLAUDE.md` / `CLAUDE.local.md`, at any depth, stays at or under **200 lin
 bin/cw                         launcher
 settings/settings.json         permissions, sandbox, status line
 plugin/                        Claude Code plugin "cw"
-  agents/                      orchestrator, worker, reviewer
+  agents/                      orchestrator, worker, reviewer, explorer
   skills/                      house style: python-service-style, python-docstrings, pydantic-annotated, naming, git-ship, writing-prs
                                architecture: service-architecture, agent-orchestration-architecture
                                tasks: add-api-endpoint, add-setting, add-migration, add-integration, add-outbox-job, add-sub-agent, add-agent-tool

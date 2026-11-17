@@ -8,6 +8,8 @@
 #   CW_ORCHESTRATOR_MODEL  (opus)    CW_ORCHESTRATOR_EFFORT (medium)   also: --model / --effort
 #   CW_WORKER_MODEL        (sonnet)  CW_WORKER_EFFORT       (medium)
 #   CW_REVIEWER_MODEL      (opus)    CW_REVIEWER_EFFORT     (medium)
+#   CW_EXPLORER_MODEL      (haiku)   CW_EXPLORER_EFFORT     (low)
+#   CW_WORKER_MAX_TURNS    (50)      CW_REVIEWER_MAX_TURNS  (25)       CW_EXPLORER_MAX_TURNS (15)
 #   CW_MAX_WORKERS         (3)       CW_NO_BANNER           (unset)
 #   CW_PERMISSION_MODE     (claude's default) starting mode: manual | acceptEdits | plan | auto
 #                          also: --plan (shortcut for --permission-mode plan), --permission-mode <mode>
@@ -48,21 +50,29 @@ fi
 : "${CW_ORCHESTRATOR_MODEL:=opus}"  "${CW_ORCHESTRATOR_EFFORT:=medium}"
 : "${CW_WORKER_MODEL:=sonnet}"      "${CW_WORKER_EFFORT:=medium}"
 : "${CW_REVIEWER_MODEL:=opus}"      "${CW_REVIEWER_EFFORT:=medium}"
+: "${CW_EXPLORER_MODEL:=haiku}"     "${CW_EXPLORER_EFFORT:=low}"
+: "${CW_WORKER_MAX_TURNS:=50}"      "${CW_REVIEWER_MAX_TURNS:=25}"    "${CW_EXPLORER_MAX_TURNS:=15}"
 : "${CW_MAX_WORKERS:=3}"
 export CW_ORCHESTRATOR_MODEL CW_ORCHESTRATOR_EFFORT CW_WORKER_MODEL CW_WORKER_EFFORT \
-       CW_REVIEWER_MODEL CW_REVIEWER_EFFORT CW_MAX_WORKERS
+       CW_REVIEWER_MODEL CW_REVIEWER_EFFORT CW_EXPLORER_MODEL CW_EXPLORER_EFFORT CW_MAX_WORKERS \
+       CW_WORKER_MAX_TURNS CW_REVIEWER_MAX_TURNS CW_EXPLORER_MAX_TURNS
 
 valid_efforts=" low medium high xhigh max "
-for effort_variable in CW_ORCHESTRATOR_EFFORT CW_WORKER_EFFORT CW_REVIEWER_EFFORT; do
+for effort_variable in CW_ORCHESTRATOR_EFFORT CW_WORKER_EFFORT CW_REVIEWER_EFFORT CW_EXPLORER_EFFORT; do
   [[ $valid_efforts == *" ${!effort_variable} "* ]] || {
     echo "cw: $effort_variable='${!effort_variable}' must be one of:$valid_efforts" >&2; exit 2; }
+done
+for turns_variable in CW_WORKER_MAX_TURNS CW_REVIEWER_MAX_TURNS CW_EXPLORER_MAX_TURNS CW_MAX_WORKERS; do
+  [[ ${!turns_variable} =~ ^[1-9][0-9]*$ ]] || {
+    echo "cw: $turns_variable='${!turns_variable}' must be a positive whole number" >&2; exit 2; }
 done
 
 # --- plugin overlay: bake the worker/reviewer model + effort into the agent files ----
 # Agent frontmatter is static, so cw renders a copy of the plugin per configuration.
 # The copy is content-addressed, so concurrent sessions never overwrite each other's files.
 overlay_key="$(
-  { printf '%s\n' "$CW_WORKER_MODEL" "$CW_WORKER_EFFORT" "$CW_REVIEWER_MODEL" "$CW_REVIEWER_EFFORT"
+  { printf '%s\n' "$CW_WORKER_MODEL" "$CW_WORKER_EFFORT" "$CW_REVIEWER_MODEL" "$CW_REVIEWER_EFFORT" \
+      "$CW_EXPLORER_MODEL" "$CW_EXPLORER_EFFORT" "$CW_WORKER_MAX_TURNS" "$CW_REVIEWER_MAX_TURNS" "$CW_EXPLORER_MAX_TURNS"
     cd "$CW_HOME/plugin" && find . -type f -exec cksum {} + | sort -k3; } | cksum | cut -d' ' -f1
 )"
 plugin_dir="${XDG_CACHE_HOME:-$HOME/.cache}/cw/plugin-$overlay_key"
@@ -85,6 +95,11 @@ PY
   set_frontmatter "$staging_dir/agents/worker.md"   effort "$CW_WORKER_EFFORT"
   set_frontmatter "$staging_dir/agents/reviewer.md" model  "$CW_REVIEWER_MODEL"
   set_frontmatter "$staging_dir/agents/reviewer.md" effort "$CW_REVIEWER_EFFORT"
+  set_frontmatter "$staging_dir/agents/explorer.md" model  "$CW_EXPLORER_MODEL"
+  set_frontmatter "$staging_dir/agents/explorer.md" effort "$CW_EXPLORER_EFFORT"
+  set_frontmatter "$staging_dir/agents/worker.md"   maxTurns "$CW_WORKER_MAX_TURNS"
+  set_frontmatter "$staging_dir/agents/reviewer.md" maxTurns "$CW_REVIEWER_MAX_TURNS"
+  set_frontmatter "$staging_dir/agents/explorer.md" maxTurns "$CW_EXPLORER_MAX_TURNS"
   mv "$staging_dir" "$plugin_dir" 2>/dev/null || rm -rf "$staging_dir"   # another session won the race
 fi
 
@@ -142,7 +157,7 @@ if [ -t 1 ] && [ "$is_print_mode" = false ] && [ -z "${CW_NO_BANNER:-}" ]; then
   branch="$(git symbolic-ref --short -q HEAD 2>/dev/null || echo -)"
   cat <<BANNER
  ▗█▖ ▗█▖   cw
- ▟▀███▀▙   orchestrator ${orchestrator_model}/${orchestrator_effort} · workers ${CW_WORKER_MODEL}/${CW_WORKER_EFFORT} 1–${CW_MAX_WORKERS} by size · reviewer ${CW_REVIEWER_MODEL}/${CW_REVIEWER_EFFORT}
+ ▟▀███▀▙   orchestrator ${orchestrator_model}/${orchestrator_effort} · workers ${CW_WORKER_MODEL}/${CW_WORKER_EFFORT} 1–${CW_MAX_WORKERS} by size · reviewer ${CW_REVIEWER_MODEL}/${CW_REVIEWER_EFFORT} · explorer ${CW_EXPLORER_MODEL}
  ▜█████▛   sandbox on · secrets guarded · branch ${branch}
   ▘▘ ▝▝    ${start_mode:+mode ${start_mode} · }shift+tab cycles modes (plan · accept edits · default)
 BANNER
