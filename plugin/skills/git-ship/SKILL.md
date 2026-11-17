@@ -1,6 +1,6 @@
 ---
 name: git-ship
-description: Branch, commit and push workflow - create a feature branch before editing, stage explicit paths, conventional commit messages, push the branch (never protected branches, never force). Use when starting a task on main or when committing/pushing work.
+description: Branch, commit, push and PR workflow - create a feature branch before editing, stage explicit paths, conventional commit messages without any Claude attribution, push the branch (never protected branches, never force), open a pull request with gh. Use when starting a task on main or when committing, pushing or opening a PR.
 ---
 
 # Branch → commit → push
@@ -28,6 +28,7 @@ git commit -m "<type>(<scope>): <imperative summary, ≤ 72 chars>" -m "<why, an
 ```
 - One logical change per commit; split if the diff mixes concerns.
 - No client names, IBANs, account ids or secrets in messages.
+- **No Claude attribution**: no `Co-Authored-By: Claude …` trailer, no "Generated with Claude Code" line. The user is the only author (a hook blocks it).
 - If the hook refuses the commit: read its output, fix the cause (delegate to a worker if non-trivial), re-stage, commit again. Never bypass it.
 
 ## 3. Push
@@ -36,5 +37,23 @@ git push -u origin HEAD
 ```
 If the remote has diverged on your own branch: `git pull --rebase origin <branch>`, rerun tests, push again (`--force-with-lease` only on your own feature branch, and only after a rebase you did).
 
-## 4. Report
-Branch name, commit hash(es) (`git log --oneline -n 3`), and the PR link if `gh` is available (`gh pr create --fill --draft` only if the user asked for a PR).
+## 4. Open the pull request
+```bash
+gh pr create --base <default-branch> --head "$(git branch --show-current)" \
+  --title "<type>(<scope>): <summary>" \
+  --body "## What
+<bullet list of changes>
+
+## Why
+<motivation / ticket id>
+
+## How it was verified
+<tests run, review outcome>"
+```
+- Find the default branch with `gh repo view --json defaultBranchRef -q .defaultBranchRef.name`.
+- If a PR for the branch already exists (`gh pr view`), just push: the PR updates itself.
+- The body follows the same rules as commit messages: no client data, no secrets, **no Claude attribution**.
+- Open it as `--draft` only if the user asks, or if work is knowingly unfinished.
+
+## 5. Report
+The branch name, the commit hash(es) (`git log --oneline -n 3`) and the PR URL.

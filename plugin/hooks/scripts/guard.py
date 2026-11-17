@@ -24,8 +24,8 @@ PROTECTED_BRANCHES = frozenset({"main", "master", "develop", "release", "product
 
 # Shell constructs that dump the environment or read secrets indirectly.
 ENV_DUMP_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = tuple(
-    (re.compile(p), why)
-    for p, why in (
+    (re.compile(pattern_text), reason)
+    for pattern_text, reason in (
         (r"(^|[;&|(`]\s*|\$\(\s*)printenv\b", "printenv dumps environment secrets"),
         (r"(^|[;&|(`]\s*|\$\(\s*)env\s*($|[;&|>)])", "bare `env` dumps environment secrets"),
         (r"\bexport\s+-p\b|\bdeclare\s+-x\b|\bcompgen\s+-v\b", "dumps exported variables"),
@@ -45,8 +45,8 @@ ENV_DUMP_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = tuple(
 )
 
 DESTRUCTIVE_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = tuple(
-    (re.compile(p), why)
-    for p, why in (
+    (re.compile(pattern_text), reason)
+    for pattern_text, reason in (
         (r"\brm\s+-[a-zA-Z]*r[a-zA-Z]*f?\s+(/|~|\$HOME)(\s|$)", "recursive delete of / or home"),
         (r"\b(curl|wget)\b[^|]*\|\s*(sudo\s+)?(ba|z)?sh\b", "pipes a download into a shell"),
         (r"\bsudo\b", "sudo is not allowed"),
@@ -59,6 +59,11 @@ DESTRUCTIVE_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = tuple(
         ),
         (r"\bgit\s+(filter-branch|filter-repo)\b", "history rewriting"),
         (r"\bgit\s+push\b.*\s--(mirror|all|delete)\b", "bulk/deleting push"),
+        (
+            r"(?is)\b(git\s+commit|gh\s+pr\s+(create|edit)|git\s+notes)\b.*"
+            r"(co-authored-by:\s*claude|noreply@anthropic\.com|generated\s+with\s+\[?claude)",
+            "Claude attribution is not allowed in commits or PRs; the user is the sole author",
+        ),
     )
 )
 

@@ -33,13 +33,15 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from _common import ALLOW, BLOCK, block, is_secret_path, project_dir, read_payload  # noqa: E402
 from agent_policy import on_stop as release_worker_slot  # noqa: E402
+from naming import find_short_names  # noqa: E402
 
 MAX_OUTPUT_LINES = 60  # keep feedback short: every line goes into the context window
 DOCSTRING_RULES = "D101,D102,D103,D106,D417,D419"
+NAMING_RULES = "N801,N802,N803,N806,N815,N816"  # pep8-naming: snake_case variables
 
 SECRET_CONTENT_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = tuple(
-    (re.compile(p), why)
-    for p, why in (
+    (re.compile(pattern_text), reason)
+    for pattern_text, reason in (
         (r"-----BEGIN [A-Z ]*PRIVATE KEY-----", "private key"),
         (r"\b(AKIA|ASIA)[0-9A-Z]{16}\b", "AWS access key"),
         (r"\bgh[pousr]_[A-Za-z0-9]{36,}\b", "GitHub token"),
@@ -112,7 +114,7 @@ def load_overrides(root: Path) -> dict[str, str]:
     except (OSError, tomllib.TOMLDecodeError):
         return {}
     section = data.get("tool", {}).get("cw", {})
-    return {k: str(v) for k, v in section.items() if isinstance(v, str)}
+    return {step_name: str(command) for step_name, command in section.items() if isinstance(command, str)}
 
 
 def python_tool(root: Path, name: str) -> str | None:
@@ -150,7 +152,11 @@ def has_tests(root: Path) -> bool:
     """
     if (root / "tests").is_dir():
         return True
-    return any(p for p in root.glob("**/test_*.py") if ".venv" not in p.parts and "node_modules" not in p.parts)
+    return any(
+        test_file
+        for test_file in root.glob("**/test_*.py")
+        if ".venv" not in test_file.parts and "node_modules" not in test_file.parts
+    )
 
 
 def gate_commands(root: Path) -> list[tuple[str, str]]:
@@ -193,15 +199,54 @@ def gate_commands(root: Path) -> list[tuple[str, str]]:
     return steps
 
 
-def run_gate(root: Path) -> str | None:
+def changed_python_files(root: Path, *, staged_only: bool) -> list[Path]:
+    """List the Python files touched by the pending change.
+
+    Args:
+        root: Repository root.
+        staged_only: Only staged files (commit gate) instead of every modified or untracked file.
+
+    Returns:
+        Existing ``.py`` files, as absolute paths.
+    """
+    command = (
+        "git diff --cached --name-only --diff-filter=ACMR"
+        if staged_only
+        else "git ls-files --modified --others --exclude-standard"
+    )
+    _, listing = run(command, root, timeout=30)
+    candidates = (root / line.strip() for line in listing.splitlines() if line.strip().endswith(".py"))
+    return sorted({candidate for candidate in candidates if candidate.is_file()})
+
+
+def naming_report(files: list[Path]) -> str | None:
+    """Check the given files for single-letter identifiers.
+
+    Args:
+        files: Python files to check.
+
+    Returns:
+        Failure report, or None when every name is descriptive.
+    """
+    violations = [message for file_path in files for message in find_short_names(file_path)]
+    if not violations:
+        return None
+    return "naming failed (single-letter names; see the naming skill):\n" + tail("\n".join(violations), 30)
+
+
+def run_gate(root: Path, *, staged_only: bool) -> str | None:
     """Run every gate step, stopping at the first failure.
 
     Args:
         root: Project root.
+        staged_only: Check names only in staged files (commit) rather than in every changed file.
 
     Returns:
         Failure report, or None when everything passed.
     """
+    naming_failure = naming_report(changed_python_files(root, staged_only=staged_only))
+    if naming_failure:
+        return naming_failure
     for step, cmd in gate_commands(root):
         code, out = run(cmd, root)
         if step == "test" and code == 5:  # pytest: no tests collected
@@ -225,18 +270,23 @@ def on_edit(payload: dict[str, Any]) -> int:
     if path.suffix != ".py" or not path.is_file():
         return ALLOW
     root = project_dir(payload)
+    problems: list[str] = []
     ruff = python_tool(root, "ruff")
-    if not ruff:
-        return ALLOW
-    quoted = json.dumps(str(path))
-    run(f"{ruff} format --quiet {quoted}", root, timeout=60)
-    is_test = path.name.startswith("test_") or path.name == "conftest.py"
-    extra = "" if is_test else f" --extend-select {DOCSTRING_RULES}"
-    code, out = run(f"{ruff} check --fix --quiet --output-format concise{extra} {quoted}", root, timeout=60)
-    if code != 0 and out:
+    if ruff:
+        quoted = json.dumps(str(path))
+        run(f"{ruff} format --quiet {quoted}", root, timeout=60)
+        is_test = path.name.startswith("test_") or path.name == "conftest.py"
+        rules = NAMING_RULES if is_test else f"{DOCSTRING_RULES},{NAMING_RULES}"
+        lint_command = f"{ruff} check --fix --quiet --output-format concise --extend-select {rules} {quoted}"
+        exit_code, lint_output = run(lint_command, root, timeout=60)
+        if exit_code != 0 and lint_output:
+            problems.append(lint_output)
+    problems += find_short_names(path)
+    if problems:
         print(
-            f"Lint issues remain in {path.name} (fix them now; public functions/methods/classes "
-            f"need Google-style docstrings):\n{tail(out, 30)}",
+            f"Lint issues remain in {path.name}. Fix them now: public functions, methods and classes need "
+            f"Google-style docstrings, and names must be descriptive snake_case words, never single letters:\n"
+            f"{tail(chr(10).join(problems), 30)}",
             file=sys.stderr,
         )
         return BLOCK
@@ -253,11 +303,11 @@ def luhn_ok(digits: str) -> bool:
         True if the checksum is valid.
     """
     total = 0
-    for i, ch in enumerate(reversed(digits)):
-        n = int(ch)
-        if i % 2 == 1:
-            n = n * 2 - 9 if n > 4 else n * 2
-        total += n
+    for position, digit_character in enumerate(reversed(digits)):
+        digit_value = int(digit_character)
+        if position % 2 == 1:
+            digit_value = digit_value * 2 - 9 if digit_value > 4 else digit_value * 2
+        total += digit_value
     return total % 10 == 0
 
 
@@ -324,7 +374,7 @@ def on_commit(payload: dict[str, Any]) -> int:
             + "\n- ".join(findings)
             + f"\nRemove them. For a deliberate test fixture, add the comment '{ALLOW_MARKER}' on that line."
         )
-    failure = run_gate(root)
+    failure = run_gate(root, staged_only=True)
     if failure:
         block(f"quality gate failed, commit refused.\n{failure}")
     return ALLOW
@@ -362,7 +412,7 @@ def _worker_gate(payload: dict[str, Any]) -> int:
     _, status = run("git status --porcelain", root, timeout=30)
     if not status.strip():
         return ALLOW
-    failure = run_gate(root)
+    failure = run_gate(root, staged_only=False)
     if failure:
         print(f"Quality gate is red - fix it before finishing.\n{failure}", file=sys.stderr)
         return BLOCK

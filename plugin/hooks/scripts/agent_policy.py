@@ -4,16 +4,23 @@
 * ``pre``  - PreToolUse on Agent: refuse expensive general-purpose subagents
              (they inherit the Opus orchestrator model) and refuse a new worker
              when ``CW_MAX_WORKERS`` (default 4) are already running.
-* ``stop`` - SubagentStop: release a worker slot.
+* ``start`` - SubagentStart: turn a pending reservation into an active slot
+               keyed by the worker's ``agent_id``.
+* ``stop``  - SubagentStop: free that worker's slot.
 
-Slots are files in a per-session state dir, guarded by an flock. Slots older
-than ``SLOT_TTL_SECONDS`` are treated as leaked and reclaimed.
+Running workers = pending reservations + active slots. Active slots are keyed by
+agent id, so a worker that is resumed with SendMessage (for example for review
+fixes) re-registers under the same id: it is never counted twice, and it never
+frees another worker's slot. The state lives in a per-session directory guarded
+by an flock. Entries older than ``SLOT_TTL_SECONDS`` are treated as leaked and
+reclaimed.
 """
 
 from __future__ import annotations
 
 import fcntl
 import os
+import re
 import sys
 import time
 import uuid
@@ -46,25 +53,67 @@ def max_workers() -> int:
 
 
 @contextmanager
-def slots_locked(payload: dict[str, Any]) -> Iterator[Path]:
-    """Lock and yield the worker slot directory, pruning stale slots.
+def slots_locked(payload: dict[str, Any]) -> Iterator[tuple[Path, Path]]:
+    """Lock the worker state and yield its pending and active directories.
+
+    Stale entries are pruned first.
 
     Args:
         payload: Hook payload (scopes state to the session).
 
     Yields:
-        The slot directory, while holding an exclusive lock.
+        ``(pending_directory, active_directory)`` while an exclusive lock is held.
     """
     root = state_dir(payload)
-    slots = root / "workers"
-    slots.mkdir(exist_ok=True)
-    with open(root / "workers.lock", "w") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
+    pending_directory = root / "workers-pending"
+    active_directory = root / "workers-active"
+    pending_directory.mkdir(exist_ok=True)
+    active_directory.mkdir(exist_ok=True)
+    with open(root / "workers.lock", "w") as lock_file:
+        fcntl.flock(lock_file, fcntl.LOCK_EX)
         now = time.time()
-        for slot in slots.iterdir():
-            if now - slot.stat().st_mtime > SLOT_TTL_SECONDS:
-                slot.unlink(missing_ok=True)
-        yield slots
+        for directory in (pending_directory, active_directory):
+            for entry in directory.iterdir():
+                if now - entry.stat().st_mtime > SLOT_TTL_SECONDS:
+                    entry.unlink(missing_ok=True)
+        yield pending_directory, active_directory
+
+
+def _oldest(directory: Path) -> list[Path]:
+    """Return a directory's entries, oldest first.
+
+    Args:
+        directory: Directory to list.
+
+    Returns:
+        Entries sorted by modification time.
+    """
+    return sorted(directory.iterdir(), key=lambda entry: entry.stat().st_mtime)
+
+
+def _is_worker(payload: dict[str, Any]) -> bool:
+    """Tell whether a subagent event belongs to a worker.
+
+    Args:
+        payload: SubagentStart or SubagentStop payload.
+
+    Returns:
+        True for ``cw:worker`` (or any agent type ending in ``worker``).
+    """
+    return str(payload.get("agent_type", "")).endswith("worker")
+
+
+def _slot_name(payload: dict[str, Any]) -> str:
+    """Build a filesystem-safe slot name from the payload's agent id.
+
+    Args:
+        payload: SubagentStart or SubagentStop payload.
+
+    Returns:
+        The sanitised agent id, or a random name when there is none.
+    """
+    agent_id = str(payload.get("agent_id") or uuid.uuid4().hex)
+    return re.sub(r"[^\w-]", "_", agent_id)
 
 
 def on_pre(payload: dict[str, Any]) -> int:
@@ -85,19 +134,40 @@ def on_pre(payload: dict[str, Any]) -> int:
         )
     if not agent_type.endswith("worker"):
         return ALLOW
-    with slots_locked(payload) as slots:
-        active = sorted(slots.iterdir(), key=lambda p: p.stat().st_mtime)
-        if len(active) >= max_workers():
+    with slots_locked(payload) as (pending_directory, active_directory):
+        running = len(_oldest(pending_directory)) + len(_oldest(active_directory))
+        if running >= max_workers():
             block(
-                f"{len(active)} workers already running (limit {max_workers()}). Wait for one to "
-                "finish, or batch this work into an existing worker's task."
+                f"{running} workers already running (limit {max_workers()}). Wait for one to finish, "
+                "or give this work to the worker that owns the related files (SendMessage)."
             )
-        (slots / uuid.uuid4().hex).touch()
+        (pending_directory / uuid.uuid4().hex).touch()
+    return ALLOW
+
+
+def on_start(payload: dict[str, Any]) -> int:
+    """Register a started (or resumed) worker under its agent id.
+
+    Args:
+        payload: SubagentStart payload.
+
+    Returns:
+        Always 0.
+    """
+    if not _is_worker(payload):
+        return ALLOW
+    with slots_locked(payload) as (pending_directory, active_directory):
+        active_slot = active_directory / _slot_name(payload)
+        if not active_slot.exists():
+            pending_reservations = _oldest(pending_directory)
+            if pending_reservations:
+                pending_reservations[0].unlink(missing_ok=True)
+        active_slot.touch()
     return ALLOW
 
 
 def on_stop(payload: dict[str, Any]) -> int:
-    """Release the oldest worker slot when a worker finishes.
+    """Free the slot of the worker that just finished.
 
     Args:
         payload: SubagentStop payload.
@@ -105,12 +175,10 @@ def on_stop(payload: dict[str, Any]) -> int:
     Returns:
         Always 0.
     """
-    if not str(payload.get("agent_type", "")).endswith("worker"):
+    if not _is_worker(payload):
         return ALLOW
-    with slots_locked(payload) as slots:
-        active = sorted(slots.iterdir(), key=lambda p: p.stat().st_mtime)
-        if active:
-            active[0].unlink(missing_ok=True)
+    with slots_locked(payload) as (_, active_directory):
+        (active_directory / _slot_name(payload)).unlink(missing_ok=True)
     return ALLOW
 
 
@@ -125,11 +193,9 @@ def main() -> int:
         payload = read_payload()
     except ValueError:
         return ALLOW
-    if mode == "pre":
-        return on_pre(payload)
-    if mode == "stop":
-        return on_stop(payload)
-    return ALLOW
+    handlers = {"pre": on_pre, "start": on_start, "stop": on_stop}
+    handler = handlers.get(mode)
+    return handler(payload) if handler else ALLOW
 
 
 if __name__ == "__main__":

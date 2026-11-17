@@ -20,8 +20,8 @@ BLOCK = 2
 # Files that may hold credentials. Template files (.env.example etc.) are
 # matched separately and allowed, because they must never contain real values.
 SECRET_PATH_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
-    re.compile(p, re.IGNORECASE)
-    for p in (
+    re.compile(pattern_text, re.IGNORECASE)
+    for pattern_text in (
         r"(^|/)\.env($|\.)",  # .env, .env.local, .env.production ...
         r"(^|/)\.envrc$",
         r"\.(pem|key|p12|pfx|jks|keystore|truststore|kdbx|ovpn|ppk|asc|gpg)$",
@@ -91,7 +91,7 @@ def is_secret_path(path: str) -> bool:
         return False
     if TEMPLATE_SUFFIX.search(normalized):
         return False
-    return any(p.search(normalized) for p in SECRET_PATH_PATTERNS)
+    return any(secret_pattern.search(normalized) for secret_pattern in SECRET_PATH_PATTERNS)
 
 
 def project_dir(payload: dict[str, Any]) -> Path:

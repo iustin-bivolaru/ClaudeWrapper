@@ -5,10 +5,10 @@ A cost-aware, security-hardened layer over Claude Code for client work in bankin
 
 | Piece | What it does |
 |---|---|
-| **Orchestrator** (`cw:orchestrator`, Opus) | The main session. Plans the work, creates a branch, delegates, reviews, commits and pushes. |
-| **Worker** (`cw:worker`, Sonnet) | Does the implementation. Up to 4 run in parallel, each owning its own files. Never commits. |
-| **Reviewer** (`cw:reviewer`, Sonnet, read-only) | Gets only a git range (`main...feat/x`) and no explanation, so it reviews the code cold. |
-| **Skills** | `python-docstrings` (Google-style docs on every public function, method and class), `pydantic-annotated` (DTOs and Settings use `Annotated[..., Field()]`, `SecretStr`, `Decimal` for money), `git-ship` (branch → commit → push). |
+| **Orchestrator** (`cw:orchestrator`, Opus) | The main session. Splits a request into at most 4 subtasks, with related subtasks going to the same worker. It creates the branch, delegates, routes review fixes back to the owning workers, then commits, pushes and opens the PR. |
+| **Worker** (`cw:worker`, Sonnet) | Does the implementation. Up to 4 run in parallel, each owning its own files, and each later fixes the review findings for its files. Never commits. |
+| **Reviewer** (`cw:reviewer`, Opus, read-only) | Gets only a git range (`main...feat/x`) and no explanation, so it reviews the code cold. |
+| **Skills** | `python-docstrings` (Google-style docs on every public function, method and class), `pydantic-annotated` (DTOs and Settings use `Annotated[..., Field()]`, `SecretStr`, `Decimal` for money), `naming` (descriptive multi-word names: `snake_case` in Python, `kebab-case` for branches, URLs and CLI flags, never single letters), `git-ship` (branch → commit → push → PR). |
 | **Hooks** | Secret guard, git policy, subagent cost policy, per-edit format and lint, and a quality gate before every commit and at the end of each worker run. |
 | **Sandbox** | Bash runs in the OS sandbox. Secret files are unreadable, network goes through an allowlist, and nothing can escape to unsandboxed mode. |
 
@@ -48,15 +48,16 @@ The status line shows the model, the branch (with a warning when you are on `mai
 - No commits on `main`/`master`/`develop`/`release`/`production`. The agent creates `feat/…`, `fix/…` and similar branches.
 - No pushes to protected branches, no `--force` (only `--force-with-lease` on your own branch), no `--no-verify`.
 - Files are staged and committed in separate commands, so the gate checks exactly what gets committed.
-- The orchestrator commits with conventional messages and pushes with `git push -u origin HEAD`.
+- The orchestrator commits with conventional messages, pushes with `git push -u origin HEAD`, and opens the PR with `gh pr create`.
+- **No Claude attribution.** The `attribution` settings are empty, and the guard blocks `Co-Authored-By: Claude` and "Generated with Claude Code" in commits and PRs. You are the only author.
 
 ## Quality gate
 
 | When | What runs |
 |---|---|
-| After every Edit/Write of a `.py` file | `ruff format` + `ruff check --fix` plus the docstring rules; leftover issues go back to the agent |
-| When a worker tries to finish (if the tree is dirty) | format check → lint → tests; the worker keeps going while the gate is red |
-| Before `git commit` | secret scan → format check → lint → tests; the commit is refused on failure |
+| After every Edit/Write of a `.py` file | `ruff format` + `ruff check --fix` with the docstring and pep8-naming rules, plus the single-letter-name check; leftover issues go back to the agent |
+| When a worker tries to finish (if the tree is dirty) | naming → format check → lint → tests; the worker keeps going while the gate is red |
+| Before `git commit` | secret scan → naming (staged files) → format check → lint → tests; the commit is refused on failure |
 
 Tools are found automatically (`.venv/bin`, then `uv run`, then `PATH`, then `uvx ruff`). For a `package.json`-only project, the gate uses the npm scripts `format:check`, `lint`, `typecheck` and `test`. To override per project:
 
@@ -74,7 +75,8 @@ test = "uv run pytest -q -x -m 'not integration'"
 - Opus plans and Sonnet does the typing: implementation is delegated to workers.
 - `general-purpose` subagents, which would inherit Opus, are blocked by a hook and redirected to `cw:worker`.
 - Searching goes to `Explore`, which is cheap.
-- At most `CW_MAX_WORKERS` (4) workers run in parallel. Every worker pays its own startup context, so fewer, well-scoped workers cost less.
+- A request becomes at most 4 subtasks, and related subtasks share one worker. At most `CW_MAX_WORKERS` (4) workers run at once. Slots are tracked per agent id, so a worker resumed for review fixes is never counted twice.
+- Review fixes go back to the worker that already has the context (`SendMessage`), not to a fresh one. The Opus reviewer runs a second time only if it found critical or high issues.
 - Hook output is trimmed to the last 30–60 lines before it reaches the model.
 - Session cost is always visible in the status line.
 
@@ -92,8 +94,8 @@ bin/cw                         launcher
 settings/settings.json         permissions, sandbox, status line
 plugin/                        Claude Code plugin "cw"
   agents/                      orchestrator, worker, reviewer
-  skills/                      python-docstrings, pydantic-annotated, git-ship
+  skills/                      python-docstrings, pydantic-annotated, naming, git-ship
   hooks/hooks.json             hook wiring
-  hooks/scripts/               guard, quality gate, agent policy, status line
+  hooks/scripts/               guard, quality gate, naming check, agent policy, status line
 tests/test_hooks.py            tests for the guards and gates
 ```

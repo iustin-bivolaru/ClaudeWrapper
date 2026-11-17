@@ -219,16 +219,40 @@ def test_general_purpose_agent_redirected(tmp_path):
     assert "cw:worker" in result.stderr
 
 
+def worker_event(session: str, agent_id: str, event: str) -> dict:
+    return {"session_id": session, "agent_type": "cw:worker", "agent_id": agent_id, "hook_event_name": event}
+
+
 def test_worker_cap(tmp_path):
     session = f"cap-{tmp_path.name}"
     pre = tool("Agent", subagent_type="cw:worker", prompt="x")
     pre["session_id"] = session
     env = {"TMPDIR": str(tmp_path), "CW_MAX_WORKERS": "2", "PATH": "/usr/bin:/bin"}
     assert run_hook("agent_policy.py", pre, "pre", env=env).returncode == 0
+    assert (
+        run_hook("agent_policy.py", worker_event(session, "agent-one", "SubagentStart"), "start", env=env).returncode
+        == 0
+    )
+    assert run_hook("agent_policy.py", pre, "pre", env=env).returncode == 0  # pending, not started yet
+    assert run_hook("agent_policy.py", pre, "pre", env=env).returncode == 2  # 1 active + 1 pending = limit
+    run_hook("agent_policy.py", worker_event(session, "agent-two", "SubagentStart"), "start", env=env)
+    run_hook("agent_policy.py", worker_event(session, "agent-one", "SubagentStop"), "stop", env=env)
     assert run_hook("agent_policy.py", pre, "pre", env=env).returncode == 0
-    assert run_hook("agent_policy.py", pre, "pre", env=env).returncode == 2
-    stop = {"session_id": session, "agent_type": "cw:worker", "hook_event_name": "SubagentStop"}
-    assert run_hook("agent_policy.py", stop, "stop", env=env).returncode == 0
+
+
+def test_resumed_worker_does_not_free_other_slots(tmp_path):
+    session = f"resume-{tmp_path.name}"
+    pre = tool("Agent", subagent_type="cw:worker", prompt="x")
+    pre["session_id"] = session
+    env = {"TMPDIR": str(tmp_path), "CW_MAX_WORKERS": "2", "PATH": "/usr/bin:/bin"}
+    for agent_id in ("agent-one", "agent-two"):
+        run_hook("agent_policy.py", pre, "pre", env=env)
+        run_hook("agent_policy.py", worker_event(session, agent_id, "SubagentStart"), "start", env=env)
+    # agent-one finishes, then is resumed with SendMessage for review fixes (no PreToolUse)
+    run_hook("agent_policy.py", worker_event(session, "agent-one", "SubagentStop"), "stop", env=env)
+    run_hook("agent_policy.py", worker_event(session, "agent-one", "SubagentStart"), "start", env=env)
+    assert run_hook("agent_policy.py", pre, "pre", env=env).returncode == 2  # still 2 running
+    run_hook("agent_policy.py", worker_event(session, "agent-one", "SubagentStop"), "stop", env=env)
     assert run_hook("agent_policy.py", pre, "pre", env=env).returncode == 0
 
 
@@ -237,3 +261,97 @@ def test_explore_and_reviewer_allowed(tmp_path):
         payload = tool("Agent", subagent_type=agent, prompt="x")
         payload["session_id"] = tmp_path.name
         assert run_hook("agent_policy.py", payload, "pre").returncode == 0
+
+
+# --- attribution ----------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        'git commit -m "feat: x" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"',
+        "gh pr create --title x --body 'Generated with [Claude Code](https://claude.com/claude-code)'",
+    ],
+)
+def test_claude_attribution_blocked(repo, command):
+    git(repo, "switch", "-qc", "feat/x")
+    result = run_hook("guard.py", tool("Bash", cwd=repo, command=command))
+    assert result.returncode == 2
+    assert "attribution" in result.stderr
+
+
+def test_plain_pr_allowed(repo):
+    git(repo, "switch", "-qc", "feat/x")
+    command = 'gh pr create --title "feat: add fx rates" --body "## What\n- rates"'
+    assert run_hook("guard.py", tool("Bash", cwd=repo, command=command)).returncode == 0
+
+
+# --- naming -----------------------------------------------------------------------
+
+BAD_NAMES_SOURCE = """
+import numpy as n
+
+
+def f(x):
+    total = 0
+    for i in range(x):
+        total += i
+    try:
+        pass
+    except ValueError as e:
+        raise
+    return [v for v in range(3)], lambda q: q
+"""
+
+GOOD_NAMES_SOURCE = """
+from typing import TypeVar
+
+T = TypeVar("T")
+
+
+def sum_attempts(max_attempts: int) -> int:
+    total_attempts = 0
+    for attempt_number in range(max_attempts):
+        total_attempts += attempt_number
+    for _ in range(2):
+        pass
+    return total_attempts
+"""
+
+
+def test_naming_flags_single_letters(tmp_path):
+    source_file = tmp_path / "bad.py"
+    source_file.write_text(BAD_NAMES_SOURCE)
+    result = subprocess.run(
+        [sys.executable, str(SCRIPTS / "naming.py"), str(source_file)], capture_output=True, text=True, check=False
+    )
+    assert result.returncode == 1
+    for name in ("'n'", "'f'", "'x'", "'i'", "'e'", "'v'", "'q'"):
+        assert name in result.stdout, name
+
+
+def test_naming_accepts_descriptive_names(tmp_path):
+    source_file = tmp_path / "good.py"
+    source_file.write_text(GOOD_NAMES_SOURCE)
+    result = subprocess.run(
+        [sys.executable, str(SCRIPTS / "naming.py"), str(source_file)], capture_output=True, text=True, check=False
+    )
+    assert result.returncode == 0, result.stdout
+
+
+def test_edit_hook_reports_single_letters(tmp_path):
+    source_file = tmp_path / "service.py"
+    source_file.write_text('def compute(x: int) -> int:\n    """Double it."""\n    return x * 2\n')
+    payload = tool("Edit", cwd=tmp_path, file_path=str(source_file))
+    result = run_hook("quality.py", payload, "edit", cwd=tmp_path)
+    assert result.returncode == 2
+    assert "'x'" in result.stderr
+
+
+def test_commit_gate_blocks_single_letters(repo):
+    git(repo, "switch", "-qc", "feat/x")
+    (repo / "module.py").write_text("for i in range(3):\n    print(i)\n")
+    git(repo, "add", "module.py")
+    result = run_hook("quality.py", tool("Bash", cwd=repo, command="git commit -m x"), "commit")
+    assert result.returncode == 2
+    assert "naming failed" in result.stderr
