@@ -1,20 +1,12 @@
 #!/usr/bin/env bash
 # remi - launcher.
-# Runs Claude Code with the orchestrator agent, the remi plugin (workers, reviewer,
-# skills, hooks) and the hardened sandbox settings.
-# Every claude flag and subcommand works: `remi -c`, `remi -p "..."`, `remi mcp list`.
-#
-# Model and effort per role. Precedence: CLI flag > environment > config file > default.
-#   REMI_ORCHESTRATOR_MODEL  (opus)    REMI_ORCHESTRATOR_EFFORT (medium)   also: --model / --effort
-#   REMI_WORKER_MODEL        (sonnet)  REMI_WORKER_EFFORT       (medium)
-#   REMI_REVIEWER_MODEL      (opus)    REMI_REVIEWER_EFFORT     (medium)
-#   REMI_EXPLORER_MODEL      (haiku)   REMI_EXPLORER_EFFORT     (low)
-#   REMI_WORKER_MAX_TURNS    (50)      REMI_REVIEWER_MAX_TURNS  (25)       REMI_EXPLORER_MAX_TURNS (15)
-#   REMI_MAX_WORKERS         (3)       REMI_NO_BANNER           (unset)
-#   REMI_PERMISSION_MODE     (claude's default) starting mode: manual | acceptEdits | plan | auto
-#                          also: --plan (shortcut for --permission-mode plan), --permission-mode <mode>
-# Switch modes during a session with Shift+Tab, as in plain Claude Code.
-# Config file: ${XDG_CONFIG_HOME:-~/.config}/remi/config, with KEY=VALUE lines (only REMI_* keys are read).
+# Runs Claude Code with the orchestrator agent, the remi plugin (workers, reviewer, explorer,
+# skills, hooks) and the hardened sandbox settings. Models, effort and turn limits per role
+# live in the agents' frontmatter (plugin/agents/*.md).
+# Every claude flag and subcommand works: `remi -c`, `remi -p "..."`, `remi --model sonnet`, `remi mcp list`.
+#   remi --plan        start in plan mode (same as --permission-mode plan)
+#   remi onboard       plan-mode session that onboards the current project (onboard skill)
+#   REMI_NO_BANNER=1   hide the hamster
 set -euo pipefail
 
 src="${BASH_SOURCE[0]}"
@@ -33,127 +25,25 @@ command -v python3 >/dev/null || { echo "remi: 'python3' is required by the hook
 case "${1:-}" in
   mcp|config|doctor|update|upgrade|install|plugin|plugins|setup-token|migrate-installer|agents|attach|logs|stop|rm|auth|login|logout)
     exec claude "$@" ;;
-  onboard)  # remi's own read-only readiness report for an existing project
+  onboard)
     shift
-    exec python3 "$REMI_HOME/plugin/hooks/scripts/onboard.py" "$@" ;;
+    set -- --permission-mode plan "Onboard this project: load the remi:onboard skill and follow it." "$@" ;;
 esac
 
-# --- configuration -------------------------------------------------------------
-config_file="${XDG_CONFIG_HOME:-$HOME/.config}/remi/config"
-if [ -f "$config_file" ]; then
-  while IFS='=' read -r config_key config_value || [ -n "$config_key" ]; do
-    config_key="${config_key//[[:space:]]/}"
-    [[ $config_key =~ ^REMI_[A-Z_]+$ ]] || continue          # ignore comments and non-remi keys
-    [ -n "${!config_key+set}" ] && continue                  # environment wins over the file
-    config_value="${config_value%%#*}"; config_value="${config_value//[\"\' ]/}"
-    export "$config_key=$config_value"
-  done < "$config_file"
-fi
-
-: "${REMI_ORCHESTRATOR_MODEL:=opus}"  "${REMI_ORCHESTRATOR_EFFORT:=medium}"
-: "${REMI_WORKER_MODEL:=sonnet}"      "${REMI_WORKER_EFFORT:=medium}"
-: "${REMI_REVIEWER_MODEL:=opus}"      "${REMI_REVIEWER_EFFORT:=medium}"
-: "${REMI_EXPLORER_MODEL:=haiku}"     "${REMI_EXPLORER_EFFORT:=low}"
-: "${REMI_WORKER_MAX_TURNS:=50}"      "${REMI_REVIEWER_MAX_TURNS:=25}"    "${REMI_EXPLORER_MAX_TURNS:=15}"
-: "${REMI_MAX_WORKERS:=3}"
-export REMI_ORCHESTRATOR_MODEL REMI_ORCHESTRATOR_EFFORT REMI_WORKER_MODEL REMI_WORKER_EFFORT \
-       REMI_REVIEWER_MODEL REMI_REVIEWER_EFFORT REMI_EXPLORER_MODEL REMI_EXPLORER_EFFORT REMI_MAX_WORKERS \
-       REMI_WORKER_MAX_TURNS REMI_REVIEWER_MAX_TURNS REMI_EXPLORER_MAX_TURNS
-
-valid_efforts=" low medium high xhigh max "
-for effort_variable in REMI_ORCHESTRATOR_EFFORT REMI_WORKER_EFFORT REMI_REVIEWER_EFFORT REMI_EXPLORER_EFFORT; do
-  [[ $valid_efforts == *" ${!effort_variable} "* ]] || {
-    echo "remi: $effort_variable='${!effort_variable}' must be one of:$valid_efforts" >&2; exit 2; }
-done
-for turns_variable in REMI_WORKER_MAX_TURNS REMI_REVIEWER_MAX_TURNS REMI_EXPLORER_MAX_TURNS REMI_MAX_WORKERS; do
-  [[ ${!turns_variable} =~ ^[1-9][0-9]*$ ]] || {
-    echo "remi: $turns_variable='${!turns_variable}' must be a positive whole number" >&2; exit 2; }
-done
-
-# --- plugin overlay: bake the worker/reviewer model + effort into the agent files ----
-# Agent frontmatter is static, so remi renders a copy of the plugin per configuration.
-# The copy is content-addressed, so concurrent sessions never overwrite each other's files.
-overlay_key="$(
-  { printf '%s\n' "$REMI_WORKER_MODEL" "$REMI_WORKER_EFFORT" "$REMI_REVIEWER_MODEL" "$REMI_REVIEWER_EFFORT" \
-      "$REMI_EXPLORER_MODEL" "$REMI_EXPLORER_EFFORT" "$REMI_WORKER_MAX_TURNS" "$REMI_REVIEWER_MAX_TURNS" "$REMI_EXPLORER_MAX_TURNS"
-    cd "$REMI_HOME/plugin" && find . -type f -exec cksum {} + | sort -k3; } | cksum | cut -d' ' -f1
-)"
-plugin_dir="${XDG_CACHE_HOME:-$HOME/.cache}/remi/plugin-$overlay_key"
-if [ ! -d "$plugin_dir" ]; then
-  mkdir -p "$(dirname "$plugin_dir")"
-  staging_dir="$(mktemp -d "$(dirname "$plugin_dir")/staging.XXXXXX")"
-  cp -R "$REMI_HOME/plugin/." "$staging_dir/"
-  set_frontmatter() {  # file key value: replace "key: ..." in the frontmatter only
-    python3 - "$1" "$2" "$3" <<'PY'
-import re, sys
-from pathlib import Path
-agent_path, key, value = Path(sys.argv[1]), sys.argv[2], sys.argv[3]
-text = agent_path.read_text()
-_, frontmatter, body = text.split("---", 2)
-frontmatter = re.sub(rf"(?m)^{key}:.*$", f"{key}: {value}", frontmatter)
-agent_path.write_text(f"---{frontmatter}---{body}")
-PY
-  }
-  set_frontmatter "$staging_dir/agents/worker.md"   model  "$REMI_WORKER_MODEL"
-  set_frontmatter "$staging_dir/agents/worker.md"   effort "$REMI_WORKER_EFFORT"
-  set_frontmatter "$staging_dir/agents/reviewer.md" model  "$REMI_REVIEWER_MODEL"
-  set_frontmatter "$staging_dir/agents/reviewer.md" effort "$REMI_REVIEWER_EFFORT"
-  set_frontmatter "$staging_dir/agents/explorer.md" model  "$REMI_EXPLORER_MODEL"
-  set_frontmatter "$staging_dir/agents/explorer.md" effort "$REMI_EXPLORER_EFFORT"
-  set_frontmatter "$staging_dir/agents/worker.md"   maxTurns "$REMI_WORKER_MAX_TURNS"
-  set_frontmatter "$staging_dir/agents/reviewer.md" maxTurns "$REMI_REVIEWER_MAX_TURNS"
-  set_frontmatter "$staging_dir/agents/explorer.md" maxTurns "$REMI_EXPLORER_MAX_TURNS"
-  mv "$staging_dir" "$plugin_dir" 2>/dev/null || rm -rf "$staging_dir"   # another session won the race
-fi
-
-# --- arguments -------------------------------------------------------------------
-wrapper_args=(
-  --plugin-dir "$plugin_dir"
-  --settings "$REMI_HOME/settings/settings.json"
-  --agent "remi:orchestrator"
-)
 # `--plan` is a remi shortcut, not a claude flag: translate it.
-passthrough_args=()
-for argument in "$@"; do
-  if [ "$argument" = "--plan" ]; then passthrough_args+=(--permission-mode plan); else passthrough_args+=("$argument"); fi
-done
-set -- ${passthrough_args[@]+"${passthrough_args[@]}"}
-
-orchestrator_model="$REMI_ORCHESTRATOR_MODEL"
-orchestrator_effort="$REMI_ORCHESTRATOR_EFFORT"
+arguments=()
 is_print_mode=false
-previous_argument=""
 for argument in "$@"; do
   case "$argument" in
+    --plan) arguments+=(--permission-mode plan); continue ;;
     -p|--print|--bg|--background) is_print_mode=true ;;
-    --model=*) orchestrator_model="${argument#--model=}" ;;
-    --effort=*) orchestrator_effort="${argument#--effort=}" ;;
   esac
-  case "$previous_argument" in
-    --model) orchestrator_model="$argument" ;;
-    --effort) orchestrator_effort="$argument" ;;
-  esac
-  previous_argument="$argument"
+  arguments+=("$argument")
 done
-case " $* " in *" --model "*|*" --model="*) ;; *) wrapper_args+=(--model "$orchestrator_model") ;; esac
-case " $* " in *" --effort "*|*" --effort="*) ;; *) wrapper_args+=(--effort "$orchestrator_effort") ;; esac
-start_mode=""
-case " $* " in
-  *" --permission-mode "*|*" --permission-mode="*) ;;
-  *)
-    if [ -n "${REMI_PERMISSION_MODE:-}" ]; then
-      case "$REMI_PERMISSION_MODE" in
-        manual|acceptEdits|plan|auto) wrapper_args+=(--permission-mode "$REMI_PERMISSION_MODE"); start_mode="$REMI_PERMISSION_MODE" ;;
-        *) echo "remi: REMI_PERMISSION_MODE='$REMI_PERMISSION_MODE' must be one of: manual acceptEdits plan auto" >&2; exit 2 ;;
-      esac
-    fi ;;
-esac
-previous_argument=""
-for argument in "$@"; do
-  case "$argument" in --permission-mode=*) start_mode="${argument#--permission-mode=}" ;; esac
-  [ "$previous_argument" = "--permission-mode" ] && start_mode="$argument"
-  previous_argument="$argument"
-done
+set -- ${arguments[@]+"${arguments[@]}"}
+
+wrapper_args=(--plugin-dir "$REMI_HOME/plugin" --settings "$REMI_HOME/settings/settings.json" --agent remi:orchestrator)
+case " $* " in *" --effort "*|*" --effort="*) ;; *) wrapper_args+=(--effort medium) ;; esac
 
 # --- GitHub: required, because remi creates repos, pushes and opens PRs itself -----------
 # The launcher runs outside the sandbox, so gh can read its token from the keychain here.
@@ -177,9 +67,9 @@ if [ -t 1 ] && [ "$is_print_mode" = false ] && [ -z "${REMI_NO_BANNER:-}" ]; the
   branch="$(git symbolic-ref --short -q HEAD 2>/dev/null || echo -)"
   cat <<BANNER
  ▗█▖ ▗█▖   remi
- ▟▀███▀▙   orchestrator ${orchestrator_model}/${orchestrator_effort} · workers ${REMI_WORKER_MODEL}/${REMI_WORKER_EFFORT} 1–${REMI_MAX_WORKERS} by size · reviewer ${REMI_REVIEWER_MODEL}/${REMI_REVIEWER_EFFORT} · explorer ${REMI_EXPLORER_MODEL}
+ ▟▀███▀▙   orchestrator opus · workers sonnet (1–3) · reviewer opus · explorer haiku
  ▜█████▛   sandbox on · secrets guarded · branch ${branch}
-  ▘▘ ▝▝    ${start_mode:+mode ${start_mode} · }shift+tab cycles modes (plan · accept edits · default)
+  ▘▘ ▝▝    shift+tab cycles modes (plan · accept edits · default)
 BANNER
 fi
 
