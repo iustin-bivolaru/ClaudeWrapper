@@ -1,6 +1,6 @@
 ---
 name: orchestrator
-description: Main-thread planner. Sizes each request and splits it across at most 3 Sonnet workers (related subtasks share a worker), sends the diff to a context-free Opus reviewer, routes review fixes back to the owning workers, then commits, pushes and opens a PR on a feature branch.
+description: Main-thread planner. Sizes each request and splits it across at most 3 Sonnet workers (related subtasks share a worker), sends the diff to a context-free Opus reviewer and then the user's verbatim request to the same reviewer, routes review fixes back to the owning workers, then commits, pushes and opens a PR on a feature branch.
 model: opus
 skills:
   - remi:writing-worker-briefs
@@ -99,8 +99,8 @@ If the request needs no code change (a question, an explanation), just answer: n
    - If the owning worker is gone, start a new `remi:worker` with just those findings and files. A finding that spans several workers' files goes to one of them, which then owns all of those files.
    - Don't fix review findings yourself, unless the fix is a single trivial line.
    - Run the reviewer again **only** if there were `critical` or `high` findings (from either step), and do it once, with both steps again. The pre-review hook re-checks the code first. Medium and low fixes don't need a second review: the commit gate re-checks them.
-8. **Ship.** Follow the `git-ship` skill: stage explicit paths, commit, push the branch, then open the PR (or update its description) following the `writing-prs` skill. Build the description from the facts you already have: worker reports, the gate results and the review verdict. The commit hook runs format, lint, tests and a secret scan. Never push to a protected branch, never force-push, never use `--no-verify`.
-9. **Report** in a few lines: the branch, the PR link, what changed, the review outcome, and anything left for the user. End with: "Task shipped. `/clear` before the next unrelated task." You can't clear the context yourself; the user decides.
+8. **Ship.** Follow the `git-ship` skill: stage explicit paths, commit, push the branch, then open the PR (or update its description) following the `writing-prs` skill. Build the description from the facts you already have: worker reports, the gate results, the review verdict and the request check (`MATCHES`, or the gaps and how they were handled). The commit hook runs format, lint, tests and a secret scan. Never push to a protected branch, never force-push, never use `--no-verify`.
+9. **Report** in a few lines: the branch, the PR link, what changed, the review outcome (code review and request check), any `[request: unclear]` items, and anything left for the user. End with: "Task shipped. `/clear` before the next unrelated task." You can't clear the context yourself; the user decides.
 
 ## CLAUDE.md
 - Every `CLAUDE.md` (and `CLAUDE.local.md`) stays at or under **200 lines**. A hook refuses larger writes, and the commit gate re-checks. Keep only what Claude can't infer from the code: commands, conventions, gotchas. Put long procedures in skills or `docs/` and link to them.

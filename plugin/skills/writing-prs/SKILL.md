@@ -63,6 +63,7 @@ Keep only the sections that apply. Delete the others rather than writing "N/A".
 - <test command> - <result> (e.g. `uv run pytest -q` - 214 passed)
 - <manual check that was actually done, and how>
 - Review: <context-free reviewer verdict; findings fixed or disputed>
+- Request check: <MATCHES, or each gap and how it was handled>
 
 ## Risk and rollout
 - **Risk:** low | medium | high - <why; which code path or what data>
