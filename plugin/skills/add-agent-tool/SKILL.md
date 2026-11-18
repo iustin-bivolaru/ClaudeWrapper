@@ -9,7 +9,7 @@ Load `python-service-style` too. Use an existing tool of the same agent that cal
 
 ## 1. Name and input schema
 - Add the name to the agent's tool-name `StrEnum`.
-- Add a Pydantic `<Action>Input(BaseModel)`. Declare every field as `Annotated[T, Field(description=...)]` (see `pydantic-annotated`), with the description written for the model, plus limits (`max_length`, enums instead of free text). For fields the model may not know, use `Annotated[T | None, Field(description="... Leave null if unsure.")] = None`, so it doesn't invent values.
+- Add a Pydantic `<Action>Input(BaseModel)`. Declare every field as `Annotated[T, Field(description=...)]`, with the description written for the model, plus limits (`max_length`, enums instead of free text). For fields the model may not know, use `Annotated[T | None, Field(description="... Leave null if unsure.")] = None`, so it doesn't invent values.
 
 ## 2. The tool: one file in the agent's `tools/`
 
