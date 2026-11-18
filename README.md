@@ -8,7 +8,7 @@ A cost-aware, security-hardened layer over Claude Code for client work in bankin
 | **Orchestrator** (`remi:orchestrator`, Opus) | The main session. Sizes each task (XS/S/M/L) and uses as few workers as the work allows: none for XS (it edits directly), 1 for S, 2 for M, 3 only for L. Related subtasks go to the same worker. It creates the branch, delegates, routes review fixes back to the owning workers, then commits, pushes and opens the PR. |
 | **Worker** (`remi:worker`, Sonnet) | Does the implementation. Usually one; up to 3 run in parallel for large, independent work, each owning its own files, and each later fixes the review findings for its files. Never commits. |
 | **Explorer** (`remi:explorer`, Haiku, read-only) | Cheap search for broad sweeps across many files. It answers with file paths and line numbers, never whole files. |
-| **Reviewer** (`remi:reviewer`, Opus, read-only) | Gets only a git range (`main...feat/x`) and no explanation, so it reviews the code cold. It applies the architecture skills' checklists when the diff touches those layers. |
+| **Reviewer** (`remi:reviewer`, Opus, read-only) | Is launched with only the base branch and no explanation, so it reviews the code cold. It applies the architecture skills' checklists when the diff touches those layers. Once that review is back, the orchestrator sends it your original request, quoted word for word, and it reports anything the change misses or adds that you didn't ask for. |
 | **House-style skills** | `python-service-style` (layering, typing, logging, errors, async I/O; the only one preloaded in workers, the rest load on demand), `python-docstrings` (reST `:param:`/`:returns:`/`:raises:` docstrings on every public module, class, method and function), `pydantic-annotated` (DTOs and Settings use `Annotated[..., Field()]`, `SecretStr`, `Decimal` for money), `naming` (descriptive multi-word names: `snake_case` in Python, `kebab-case` for branches, URLs and CLI flags, never single letters), `git-ship` (branch → commit → push → PR), `writing-worker-briefs` (preloaded in the orchestrator: every worker brief puts the task, owned files, critical constraints and acceptance criteria at the beginning and repeats them at the end, with detail in the middle), `writing-prs` (a plain, readable title, a body built from facts: what, why, how it was verified, risk and rollout, config and migrations, commits; no client data or attribution; kept current as the branch changes). |
 | **Architecture skills** (loaded on demand by the orchestrator and reviewer) | `service-architecture` (layers, composition root, transactions, errors, outbox, plus a review checklist) and `agent-orchestration-architecture` (routing, hand-offs, entitlements, stream contract, prompt-injection boundaries, plus a review checklist). |
 | **Task skills** (loaded on demand) | `add-api-endpoint`, `add-setting`, `add-migration`, `add-integration`, `add-outbox-job`, `add-sub-agent`, `add-agent-tool`. Each is a checklist of every piece a change of that kind must touch. |
@@ -117,7 +117,9 @@ you: task ─▶ orchestrator: size it (XS/S/M/L), plan, worker map
                           ruff check --fix · ruff format · lint · tests on the  │
                           whole change; red ⇒ review refused, fix via workers   │
                           ▼                                                     │
-              remi:reviewer (no context, only "against main")                     │
+              remi:reviewer (no context, only "against main")                   │
+                          ▼ then SendMessage: your request, verbatim            │
+              same reviewer: does it do what you asked?                         │
                           ▼                                                     │
               findings ─▶ orchestrator ─▶ owning worker(s) fix (SendMessage)    │
                           critical/high ⇒ one more review                       │
@@ -160,7 +162,9 @@ So one fixed line in an old module stays a one-line diff, and workers don't spen
 | After every Edit/Write of a `.py` file | `ruff check --fix` + `ruff format` (scoped as above), then lint (changed lines) with the docstring, pep8-naming, no-f-strings-in-logs (`G004`) and no-relative-imports (`TID252`) rules, plus the single-letter-name check; leftover issues go back to the agent |
 | When a worker tries to finish | `ruff check --fix` + `ruff format` + lint + naming on **the files that worker edited**, so it is never blocked by another worker's half-finished files. Tests run only if it is the last worker still running. The worker keeps going while red. |
 | Before `remi:reviewer` starts | Every worker must be finished. Then `ruff check --fix` + `ruff format` on the whole change, followed by naming → format check → lint → typecheck → tests. If anything is red, the review is refused and the failures go to the workers. |
-| Before `git commit` | secret scan → naming (staged files) → format check → lint → tests; the commit is refused on failure |
+| When `remi:reviewer` is launched | Its prompt must be one base-branch line. Explanations, plans and your request are refused, so the code review is blind. |
+| When the request goes to the reviewer (`SendMessage`) | One instruction line plus your messages quoted word for word in `<request>` blocks (your messages are recorded by a `UserPromptSubmit` hook). Explanations, plans and reworded quotes are refused. |
+| Before `git commit` | request check sent to the latest reviewer (if one ran) → secret scan → naming (staged files) → format check → lint → tests; the commit is refused on failure |
 
 Tools are found automatically (`.venv/bin`, then `uv run`, then `PATH`, then `uvx ruff`). For a `package.json`-only project, the gate uses the npm scripts `format:check`, `lint`, `typecheck` and `test`. To override per project:
 

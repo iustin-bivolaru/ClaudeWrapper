@@ -70,15 +70,26 @@ If the request needs no code change (a question, an explanation), just answer: n
    - A subtask that needs real secrets to verify (the dev server, alembic against the dev DB) can't be run in the sandbox. Collect those commands and ask the user to run them.
 5. **Integrate.** Check each worker's report. Close any gap with `SendMessage` to that worker. Don't spawn a new worker for it.
    - Hooks have already run on each worker's own files: `ruff check --fix`, `ruff format` and lint when it finished, plus the tests when it was the last worker still running. Don't rerun them.
-6. **Review** (S/M/L, and XS changes in sensitive areas). Launch `remi:reviewer` with **only** the base branch: "Review the changes against `main`." Don't explain what was done or why: the reviewer must judge the code cold.
+6. **Review** (S/M/L, and XS changes in sensitive areas). Two steps, with the same reviewer:
+   - **Code review, blind.** Launch `remi:reviewer` with **only** the base branch: "Review the changes against `main`." Don't explain what was done or why: the reviewer must judge the code cold. A hook refuses any other text, including the request.
+   - **Request check.** When its code review is back, send the **same** reviewer (its agent id) the user's request with `SendMessage`:
+     ```
+     Check the change against the user's request.
+
+     <request>
+     <the user's original message, word for word>
+     </request>
+     ```
+     Add one more `<request>` block for each later user message that changed what was asked (such as a change to the worker map). Never summarise, reword or trim inside a block, and add no plan or reasons. A hook refuses anything else, and the commit gate refuses to commit until the latest reviewer has had this message.
    - A hook runs first. It refuses the review while any worker is still running, then runs `ruff check --fix`, `ruff format`, lint and the tests on the whole change. If it refuses, send each failure to the worker that owns the file, wait for those workers, and launch the review again.
 7. **Route the fixes.** When the review comes back:
    - Drop findings you can verify are wrong. Note them in your report.
+   - `[request: missing]` and `[request: extra]` findings come to you first: you may have misread the request. Re-read it. If the finding is right, re-plan the missing part and send it to the worker that owns the files (or a new worker for new files). Remove an extra only if it is clearly unwanted; otherwise ask the user. If you still think the change matches, say why in your report. List `[request: unclear]` items in your report for the user.
    - Group the remaining findings by file and look up the **worker that owns each file** in the worker map.
    - Send each worker **only its own findings** with `SendMessage`, quoting them verbatim with file:line, using the review-fix shape from `writing-worker-briefs` (findings first, the instructions repeated at the end). Workers that have something to fix run in parallel. Each one's stop hook checks its fixes again.
    - If the owning worker is gone, start a new `remi:worker` with just those findings and files. A finding that spans several workers' files goes to one of them, which then owns all of those files.
    - Don't fix review findings yourself, unless the fix is a single trivial line.
-   - Run the reviewer again **only** if there were `critical` or `high` findings, and do it once. The pre-review hook re-checks the code first. Medium and low fixes don't need a second review: the commit gate re-checks them.
+   - Run the reviewer again **only** if there were `critical` or `high` findings (from either step), and do it once, with both steps again. The pre-review hook re-checks the code first. Medium and low fixes don't need a second review: the commit gate re-checks them.
 8. **Ship.** Follow the `git-ship` skill: stage explicit paths, commit, push the branch, then open the PR (or update its description) following the `writing-prs` skill. Build the description from the facts you already have: worker reports, the gate results and the review verdict. The commit hook runs format, lint, tests and a secret scan. Never push to a protected branch, never force-push, never use `--no-verify`.
 9. **Report** in a few lines: the branch, the PR link, what changed, the review outcome, and anything left for the user. End with: "Task shipped. `/clear` before the next unrelated task." You can't clear the context yourself; the user decides.
 

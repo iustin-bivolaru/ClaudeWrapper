@@ -44,7 +44,7 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).parent))
 
 from _common import ALLOW, BLOCK, block, is_secret_path, project_dir, read_payload, state_dir  # noqa: E402
-from agent_policy import _slot_name, slots_locked  # noqa: E402
+from agent_policy import _slot_name, request_check_due, slots_locked  # noqa: E402
 from agent_policy import on_stop as release_worker_slot  # noqa: E402
 from claude_md import count_lines, is_claude_md, max_lines  # noqa: E402
 from naming import short_name_violations  # noqa: E402
@@ -687,6 +687,13 @@ def on_commit(payload: dict[str, Any]) -> int:
         block(
             "stage files in a separate command first (git add <paths>), then run `git commit` "
             "alone, so the gate checks exactly what will be committed. Do not use `commit -a`."
+        )
+    waiting_reviewer = request_check_due(payload)
+    if waiting_reviewer:
+        block(
+            f"the reviewer ({waiting_reviewer}) hasn't checked the change against the user's request yet. Send it "
+            "the user's messages verbatim in <request>...</request> with SendMessage, handle its request "
+            "findings, then commit."
         )
     root = project_dir(payload)
     too_long = staged_claude_md_problems(root)

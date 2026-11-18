@@ -272,6 +272,138 @@ def test_explore_and_reviewer_allowed(tmp_path):
         assert run_hook("agent_policy.py", payload, "pre").returncode == 0
 
 
+# --- reviewer: blind code review, then the verbatim request ---------------------------
+
+REQUEST = "Reject transfers over the daily limit,\nexcept for internal accounts."
+BASE_LINE = "Review the changes against `main`."
+CHECK_LINE = "Check the change against the user's request."
+
+
+def review_env(tmp_path: Path) -> dict:
+    return {"REMI_STATE_DIR": str(tmp_path / "state"), "PATH": "/usr/bin:/bin", "HOME": str(tmp_path)}
+
+
+def reviewer_launch(prompt: str, session: str, env: dict):
+    payload = tool("Agent", subagent_type="remi:reviewer", prompt=prompt)
+    payload["session_id"] = session
+    return run_hook("agent_policy.py", payload, "pre", env=env)
+
+
+def record_prompt(message: str, session: str, env: dict) -> None:
+    payload = {"session_id": session, "hook_event_name": "UserPromptSubmit", "prompt": message}
+    assert run_hook("agent_policy.py", payload, "prompt", env=env).returncode == 0
+
+
+def start_reviewer(session: str, agent_id: str, env: dict) -> None:
+    payload = {"session_id": session, "agent_type": "remi:reviewer", "agent_id": agent_id}
+    assert run_hook("agent_policy.py", payload, "start", env=env).returncode == 0
+
+
+def send_message(to: str, message: str, session: str, env: dict):
+    payload = tool("SendMessage", to=to, message=message)
+    payload["session_id"] = session
+    return run_hook("agent_policy.py", payload, "message", env=env)
+
+
+def commit_payload(repo: Path, session: str) -> dict:
+    payload = tool("Bash", cwd=repo, command="git commit -m x")
+    payload["session_id"] = session
+    return payload
+
+
+def test_blind_reviewer_launch_allowed(tmp_path):
+    env = review_env(tmp_path)
+    record_prompt(REQUEST, "blind", env)
+    result = reviewer_launch(BASE_LINE, "blind", env)
+    assert result.returncode == 0, result.stderr
+
+
+def test_reviewer_launch_with_request_blocked(tmp_path):
+    env = review_env(tmp_path)
+    record_prompt(REQUEST, "early", env)
+    result = reviewer_launch(f"{BASE_LINE}\n<request>{REQUEST}</request>", "early", env)
+    assert result.returncode == 2
+    assert "blind" in result.stderr
+
+
+@pytest.mark.parametrize(
+    "prompt",
+    [
+        f"{BASE_LINE}\nThe worker added a daily limit in transfers.py.",
+        f"{BASE_LINE} " + "Context: " * 40,
+    ],
+)
+def test_reviewer_launch_with_context_blocked(tmp_path, prompt):
+    result = reviewer_launch(prompt, "context", review_env(tmp_path))
+    assert result.returncode == 2
+    assert "no context" in result.stderr
+
+
+def test_request_check_with_verbatim_quote_allowed(tmp_path):
+    env = review_env(tmp_path)
+    record_prompt(REQUEST, "verbatim", env)
+    record_prompt("go", "verbatim", env)
+    start_reviewer("verbatim", "reviewer-one", env)
+    rewrapped = "Reject transfers over the daily limit, except\n  for internal accounts."
+    message = f"{CHECK_LINE}\n\n<request>\n{rewrapped}\n</request>\n<request>go</request>"
+    result = send_message("reviewer-one", message, "verbatim", env)
+    assert result.returncode == 0, result.stderr
+
+
+def test_request_check_with_paraphrase_blocked(tmp_path):
+    env = review_env(tmp_path)
+    record_prompt(REQUEST, "paraphrase", env)
+    start_reviewer("paraphrase", "reviewer-one", env)
+    result = send_message("reviewer-one", f"{CHECK_LINE}\n<request>Add a daily limit.</request>", "paraphrase", env)
+    assert result.returncode == 2
+    assert "verbatim" in result.stderr
+
+
+def test_request_check_with_context_blocked(tmp_path):
+    env = review_env(tmp_path)
+    record_prompt(REQUEST, "reasons", env)
+    start_reviewer("reasons", "reviewer-one", env)
+    message = f"{CHECK_LINE}\n<request>{REQUEST}</request>\nWe read 'daily' as per transaction."
+    result = send_message("reviewer-one", message, "reasons", env)
+    assert result.returncode == 2
+    assert "no context" in result.stderr
+
+
+def test_messages_to_workers_not_checked(tmp_path):
+    env = review_env(tmp_path)
+    record_prompt(REQUEST, "worker-msg", env)
+    result = send_message("worker-one", "Fix these findings:\n- a.py:3\n<request>made up</request>", "worker-msg", env)
+    assert result.returncode == 0, result.stderr
+
+
+def test_commit_refused_until_request_check_sent(repo, tmp_path):
+    env = review_env(tmp_path)
+    git(repo, "switch", "-qc", "feat/x")
+    (repo / "notes.txt").write_text("plain text\n")
+    git(repo, "add", "notes.txt")
+    record_prompt(REQUEST, "gate", env)
+    start_reviewer("gate", "reviewer-one", env)
+    result = run_hook("quality.py", commit_payload(repo, "gate"), "commit", env=env)
+    assert result.returncode == 2
+    assert "reviewer-one" in result.stderr
+    start_reviewer("gate", "reviewer-one", env)  # resumed by SendMessage: not a new review
+    assert send_message("reviewer-one", f"{CHECK_LINE}\n<request>{REQUEST}</request>", "gate", env).returncode == 0
+    result = run_hook("quality.py", commit_payload(repo, "gate"), "commit", env=env)
+    assert result.returncode == 0, result.stderr
+    start_reviewer("gate", "reviewer-two", env)  # second review: due again
+    assert run_hook("quality.py", commit_payload(repo, "gate"), "commit", env=env).returncode == 2
+
+
+def test_commit_allowed_without_review_or_user_messages(repo, tmp_path):
+    env = review_env(tmp_path)
+    git(repo, "switch", "-qc", "feat/x")
+    (repo / "notes.txt").write_text("plain text\n")
+    git(repo, "add", "notes.txt")
+    start_reviewer("silent", "reviewer-one", env)  # no recorded user message: nothing to check against
+    result = run_hook("quality.py", commit_payload(repo, "silent"), "commit", env=env)
+    assert result.returncode == 0, result.stderr
+
+
 # --- attribution ----------------------------------------------------------------
 
 
