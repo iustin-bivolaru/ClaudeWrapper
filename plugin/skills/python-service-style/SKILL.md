@@ -15,13 +15,14 @@ description: House style for async Python backend services (FastAPI, SQLAlchemy 
 - Put `logger = logging.getLogger(__name__)` right after the imports in any module that logs.
 - Module constants are `UPPER_SNAKE` and annotated `Final`. A constant whose meaning isn't obvious gets a string-literal docstring on the line after it.
 - Keep one concept per file: one repository, one service, one tool or one mapper family.
+- Each layer is a package with one module per resource: `models/<resource>.py`, `api/routes/<resource>_routes.py`, `schemas/<table>.py`, `repositories/`, `services/`, `mappers/`. Never a single `models.py` or `routes.py` holding every resource, even in a new or small service. The full tree is in `service-architecture` (Package layout); load it before creating a new service or a new package.
 
 ## Which type goes where
 
 Keep these folders separate. Find the project's names for them.
 
 - **ORM tables** (often `schemas/` or `db/`): SQLAlchemy `Mapped[...]` and `mapped_column(..., doc="...")`. Use UUID primary keys (`uuid7` if available), and name FKs, unique constraints and enums explicitly.
-- **Pydantic models** (often `models/`): API request and response bodies, domain values and enums. API models share a base that sets camelCase aliases (`alias_generator=to_camel, populate_by_name=True`). Response models add `from_attributes=True`.
+- **Pydantic models** (`models/`, one module per resource, with shared bases in `models/base.py`): API request and response bodies, domain values and enums. API models share a base that sets camelCase aliases (`alias_generator=to_camel, populate_by_name=True`). Response models add `from_attributes=True`.
 - **Mappers**: plain functions named `from_<source>_to_<target>(...)`. Don't put converters on the models themselves.
 - **Helpers**: small reusable utilities with no business logic.
 - Internal value objects use `@dataclass(kw_only=True)`, or `@dataclass(frozen=True, slots=True, kw_only=True)` when immutable. Document fields with `Annotated[T, "what it is"]`.
