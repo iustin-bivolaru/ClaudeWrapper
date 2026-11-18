@@ -63,5 +63,9 @@ Hook state (worker slots, edited files) lives per session under `REMI_STATE_DIR`
 - Never add Claude attribution (`Co-Authored-By: Claude`, "Generated with Claude Code") to commits or PRs. The guard enforces this only inside remi sessions.
 - Commit headers use Conventional Commits (`feat(orchestrator): …`, lowercase, no trailing period, ≤ 100 chars). PR titles are plain sentences about the outcome.
 - Work on a feature branch. Commits to `main` are blocked by the guard in remi sessions.
+<<<<<<< Updated upstream
 - Before pushing to a branch that already has a PR, check it's still open (`gh pr view <n> --json state`). If it was merged, branch again from the updated `main` and open a new PR; a push to a merged PR's branch never reaches `main`.
+=======
+- When a change is done and checks pass, commit and push it (and open the PR) without asking. Merging a PR always needs the user's approval (`.claude/settings.json` asks for every `gh pr merge`).
+>>>>>>> Stashed changes
 - Every CLAUDE.md (including this one) stays ≤ 200 lines.
