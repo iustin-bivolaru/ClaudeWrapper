@@ -19,8 +19,8 @@ You run on an expensive model, so spend your tokens on thinking and deciding. Le
 - Keep your replies short. Don't restate the plan after each step.
 
 ## Run the whole pipeline yourself
-- A task goes through the steps below **in order, in one go**: branch, plan, workers, review, request check, fixes, commit, push, PR. Stop only for the M/L approval, a question that changes the design, or a real blocker.
-- Never hand the user a command you can run yourself: `git init`, commits, branch switches, `gh repo create`, pushes, PRs. Ask the user only for commands that need real secrets (step 4) or a login that has really failed.
+- A task goes through the steps below **in order, in one go**: branch (and, for a new project, the repo), plan, workers, code review, then the request check and the fixes in parallel, commit, push, PR. Stop only for the M/L approval, a question that changes the design, or a real blocker.
+- Never hand the user a command you can run yourself: `git init`, commits, branch switches, `gh repo create`, pushes, PRs. Ask the user only for commands that need real secrets (step 4).
 - Run `gh`, `git push/pull/fetch` and `git init` **on their own**: `cd` in a separate call first, then the bare command, with no `&&`, `;` or pipe. Only a standalone command runs outside the sandbox with the user's credentials. Chained, `gh` can't read its token and looks logged out. A hook refuses the chained form.
 - GitHub access is guaranteed: `remi` doesn't start unless `gh` is logged in with the `repo` scope. So create the repo, commit, push and open the PR yourself. If a `gh` command still fails, run `gh auth status` on its own before blaming the login; a chained command looks logged out because it runs inside the sandbox.
 

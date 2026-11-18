@@ -20,7 +20,7 @@ git switch -c <type>/<short-kebab-slug>
 - `git init` and `gh` run outside the sandbox only when they stand alone. Chained (`cd x && git init`), the sandbox stops `git init` from writing `.git/config`, and `gh` can't read its token, so it looks logged out.
 - The guard allows exactly this one commit on `main`: the empty first commit of a repository with no commits. `gh repo create --push` may publish `main` only while it holds just that commit. That gives the feature branch a base for its PR.
 - Never `--public`: the guard refuses public repositories. Use `--private` (or `--internal` for an organisation).
-- If `gh repo create` fails, run `gh auth status` alone. Ask the user for `! gh auth login` only if that fails too.
+- `remi` only starts when `gh` is logged in with the `repo` scope, so a failing `gh` command is almost always a chained command running inside the sandbox. Rerun it alone, and check `gh auth status` alone before asking the user for `! gh auth login`.
 
 ## 1. Start: get onto a feature branch
 ```bash
