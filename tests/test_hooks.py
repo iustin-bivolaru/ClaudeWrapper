@@ -935,3 +935,116 @@ def test_onboard_outside_git(tmp_path):
     result = run_onboard(tmp_path)
     assert result.returncode == 2
     assert "inside a git repository" in result.stderr
+
+
+# --- credential commands stand alone; new repositories bootstrap themselves --------
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cd ~/proj && gh auth status",
+        "ls; gh repo view",
+        "gh pr list | head -5",
+        "cd ~/proj && git init -b main",
+        "git add a.txt && git push origin HEAD",
+        "GH_PAGER= gh pr view && echo done",
+    ],
+)
+def test_chained_credential_commands_blocked(repo, command):
+    result = run_hook("guard.py", tool("Bash", cwd=repo, command=command))
+    assert result.returncode == 2
+    assert "on its own" in result.stderr
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "gh auth status",
+        'gh pr create --title "Add limits" --body "a | b; c && d" --head feat/x',
+        "git status --short && git diff --stat",
+        "git log --oneline | grep push",
+        "git init -b main",
+    ],
+)
+def test_standalone_credential_commands_allowed(repo, command):
+    git(repo, "switch", "-qc", "feat/x")
+    result = run_hook("guard.py", tool("Bash", cwd=repo, command=command))
+    assert result.returncode == 0, result.stderr
+
+
+@pytest.fixture
+def new_repo(tmp_path: Path) -> Path:
+    git(tmp_path, "init", "-q", "-b", "main")
+    git(tmp_path, "config", "user.email", "t@example.com")
+    git(tmp_path, "config", "user.name", "t")
+    return tmp_path
+
+
+def test_bootstrap_commit_on_new_repo_allowed(new_repo):
+    command = 'git commit --allow-empty -m "chore: initial commit"'
+    result = run_hook("guard.py", tool("Bash", cwd=new_repo, command=command))
+    assert result.returncode == 0, result.stderr
+
+
+def test_bootstrap_commit_with_staged_files_blocked(new_repo):
+    (new_repo / "app.py").write_text("print('hi')\n")
+    git(new_repo, "add", "app.py")
+    command = 'git commit --allow-empty -m "chore: initial commit"'
+    assert run_hook("guard.py", tool("Bash", cwd=new_repo, command=command)).returncode == 2
+
+
+def test_second_empty_commit_on_main_blocked(new_repo):
+    git(new_repo, "commit", "-q", "--allow-empty", "-m", "chore: initial commit")
+    command = 'git commit --allow-empty -m "chore: another"'
+    assert run_hook("guard.py", tool("Bash", cwd=new_repo, command=command)).returncode == 2
+
+
+def test_repo_create_push_only_with_bootstrap_main(new_repo):
+    command = "gh repo create svc --private --source . --remote origin --push"
+    git(new_repo, "commit", "-q", "--allow-empty", "-m", "chore: initial commit")
+    assert run_hook("guard.py", tool("Bash", cwd=new_repo, command=command)).returncode == 0
+    (new_repo / "app.py").write_text("print('hi')\n")
+    git(new_repo, "add", "app.py")
+    git(new_repo, "commit", "-qm", "feat: app")
+    result = run_hook("guard.py", tool("Bash", cwd=new_repo, command=command))
+    assert result.returncode == 2
+    assert "bootstrap" in result.stderr
+
+
+# --- workers and the reviewer never run at the same time ----------------------------
+
+
+def stop_reviewer(session: str, agent_id: str, env: dict) -> None:
+    payload = {"session_id": session, "agent_type": "remi:reviewer", "agent_id": agent_id, "cwd": "/tmp"}
+    assert run_hook("quality.py", payload, "worker", env=env).returncode == 0
+
+
+def test_no_worker_while_reviewer_runs(tmp_path):
+    env = review_env(tmp_path)
+    start_worker("overlap", "worker-one", env)
+    run_hook("agent_policy.py", worker_event("overlap", "worker-one", "SubagentStop"), "stop", env=env)
+    start_reviewer("overlap", "reviewer-one", env)
+    launch = tool("Agent", subagent_type="remi:worker", prompt="x")
+    launch["session_id"] = "overlap"
+    result = run_hook("agent_policy.py", launch, "pre", env=env)
+    assert result.returncode == 2
+    assert "reviewer is still running" in result.stderr
+    assert send_message("worker-one", "Fix a.py:3", "overlap", env).returncode == 2
+    stop_reviewer("overlap", "reviewer-one", env)
+    result = send_message("worker-one", "Fix a.py:3", "overlap", env)
+    assert result.returncode == 0, result.stderr
+
+
+def test_no_reviewer_message_while_worker_runs(tmp_path):
+    env = review_env(tmp_path)
+    record_prompt(REQUEST, "busy-worker", env)
+    start_reviewer("busy-worker", "reviewer-one", env)
+    stop_reviewer("busy-worker", "reviewer-one", env)
+    start_worker("busy-worker", "worker-one", env)
+    message = f"{CHECK_LINE}\n<request>{REQUEST}</request>"
+    result = send_message("reviewer-one", message, "busy-worker", env)
+    assert result.returncode == 2
+    assert "still running" in result.stderr
+    run_hook("agent_policy.py", worker_event("busy-worker", "worker-one", "SubagentStop"), "stop", env=env)
+    assert send_message("reviewer-one", message, "busy-worker", env).returncode == 0

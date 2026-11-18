@@ -9,7 +9,8 @@ Modes (first CLI argument):
                for secrets and run the full gate; block the commit on failure.
 * ``worker`` - SubagentStop: ``ruff check --fix`` + ``ruff format`` on the files
                this worker edited, then lint them; run the tests when no other
-               worker is still running. A worker may not finish while red.
+               worker is still running. A worker may not finish while red. For a
+               reviewer, it only marks the reviewer as no longer running.
 * ``review`` - PreToolUse on Agent: before ``remi:reviewer`` starts, every worker
                must be done, and fix + format + lint + tests must pass on the
                whole change. A red gate refuses the review.
@@ -44,7 +45,7 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).parent))
 
 from _common import ALLOW, BLOCK, block, is_secret_path, project_dir, read_payload, state_dir  # noqa: E402
-from agent_policy import _slot_name, request_check_due, slots_locked  # noqa: E402
+from agent_policy import _slot_name, request_check_due, reviewer_stopped, slots_locked  # noqa: E402
 from agent_policy import on_stop as release_worker_slot  # noqa: E402
 from claude_md import count_lines, is_claude_md, max_lines  # noqa: E402
 from naming import short_name_violations  # noqa: E402
@@ -724,6 +725,9 @@ def on_worker_stop(payload: dict[str, Any]) -> int:
     Returns:
         Exit code; 2 makes the worker continue fixing.
     """
+    if str(payload.get("agent_type", "")).endswith("reviewer"):
+        reviewer_stopped(payload)
+        return ALLOW
     code = _worker_gate(payload)
     if code == ALLOW:
         release_worker_slot(payload)

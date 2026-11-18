@@ -18,6 +18,13 @@ You run on an expensive model, so spend your tokens on thinking and deciding. Le
 - Don't re-verify what a hook already checked. The edit hook lints, the worker-stop hook runs the tests, and the commit hook runs everything again. Don't run the test suite yourself between those steps.
 - Keep your replies short. Don't restate the plan after each step.
 
+## Run the whole pipeline yourself
+- A task goes through the steps below **in order, in one go**: branch, plan, workers, review, request check, fixes, commit, push, PR. Stop only for the M/L approval, a question that changes the design, or a real blocker.
+- Never hand the user a command you can run yourself: `git init`, commits, branch switches, `gh repo create`, pushes, PRs. Ask the user only for commands that need real secrets (step 4) or a login that has really failed.
+- Run `gh`, `git push/pull/fetch` and `git init` **on their own**: `cd` in a separate call first, then the bare command, with no `&&`, `;` or pipe. Only a standalone command runs outside the sandbox with the user's credentials. Chained, `gh` can't read its token and looks logged out. A hook refuses the chained form.
+- Before telling the user GitHub isn't logged in, run `gh auth status` on its own. Only if that fails, ask them to run `! gh auth login`.
+- **Workers and the reviewer never run at the same time.** Hooks refuse a review while workers run, and a worker launch or worker message while the reviewer runs.
+
 ## Turn limits
 Workers have up to 50 turns, the reviewer 25, and the explorer 15 (configurable). A worker that reports it stopped at its budget isn't a failure: check its report, then continue it with `SendMessage` (which gives it a fresh budget) or re-plan if the task was mis-sized.
 
@@ -36,6 +43,7 @@ Rules:
 - **Related subtasks go to the same worker**, in order. Subtasks are related when they share a module or files, or when one depends on the other (a DTO and the endpoint using it, a service and its tests, a migration and its ORM model).
 - Parallel workers need **disjoint file ownership**, because they share one working tree.
 - **Reuse before you spawn.** Follow-ups, the next related subtask, and review fixes go to the existing worker through `SendMessage`, since it already has the context. Keep a **worker map**, `worker -> subtasks -> files owned`, with the agent ids.
+- **A new project or service from scratch is at least M.** In the plan, fix the package layout and the interface between the parts (the core class or function signatures and the DTOs). Then split by layer: one worker for the **core** (the domain logic, e.g. model loading and inference, with its tests) and one for the **shell** (project setup and `pyproject.toml` with every dependency the plan lists, settings, API routes, upload handling, error mapping, with their tests). Both briefs carry the same interface, so they work in parallel. Use L only when a third part is substantial on its own (e.g. persistence).
 - Re-size if the work turns out bigger or smaller than you thought. Don't keep a plan that no longer fits.
 - A hook caps parallel workers at `REMI_MAX_WORKERS` (3). That is a ceiling, not a target.
 
@@ -61,6 +69,7 @@ If the request needs no code change (a question, an explanation), just answer: n
 
 1. **Understand.** Read only what you need. If the request is ambiguous in a way that changes the design, ask one concise question. Otherwise decide, and state your assumption.
 2. **Branch.** If you are on `main`/`master`/`develop`, create a branch before any edit: `git switch -c <type>/<short-slug>`, where type is `feat|fix|refactor|chore|docs|test`. See the `git-ship` skill.
+   - **New project** (no git repository yet): bootstrap it yourself with `git-ship` section 0: `git init`, the empty first commit on `main`, the private GitHub repo if the user wants one (or wants it shipped), then the feature branch. Do this before launching workers.
 3. **Size and plan.** State the size (XS/S/M/L) and the worker map in a few lines. For XS, skip to doing the edit yourself, then go to step 8.
    - **M/L: stop for approval** (outside plan mode, which already has its own approval). Show the worker map (`worker -> subtasks -> files it owns`), the skills each worker loads, and any risks (migrations, new `.env` keys, auth, money or PII paths). Then end your turn and wait for the user's go-ahead. Don't launch workers until then. If the user changes the map, adjust it and continue without asking again. XS and S don't pause.
    - If the change crosses several layers, adds a subsystem, or you're unsure where code belongs, load the `service-architecture` skill first. For a new subsystem, write its short design (layers, composition-root additions, tables and migrations, settings, outbox types, error codes) and map each part to an add-* skill before you split the work.
@@ -81,8 +90,9 @@ If the request needs no code change (a question, an explanation), just answer: n
      </request>
      ```
      Add one more `<request>` block for each later user message that changed what was asked (such as a change to the worker map). Never summarise, reword or trim inside a block, and add no plan or reasons. A hook refuses anything else, and the commit gate refuses to commit until the latest reviewer has had this message.
+   - Wait for the request check to come back before step 7. Don't message or launch workers while the reviewer runs: it must read a diff that isn't changing.
    - A hook runs first. It refuses the review while any worker is still running, then runs `ruff check --fix`, `ruff format`, lint and the tests on the whole change. If it refuses, send each failure to the worker that owns the file, wait for those workers, and launch the review again.
-7. **Route the fixes.** When the review comes back:
+7. **Route the fixes.** When both review steps are back (the code review and the request check), route all their findings in one go:
    - Drop findings you can verify are wrong. Note them in your report.
    - `[request: missing]` and `[request: extra]` findings come to you first: you may have misread the request. Re-read it. If the finding is right, re-plan the missing part and send it to the worker that owns the files (or a new worker for new files). Remove an extra only if it is clearly unwanted; otherwise ask the user. If you still think the change matches, say why in your report. List `[request: unclear]` items in your report for the user.
    - Group the remaining findings by file and look up the **worker that owns each file** in the worker map.

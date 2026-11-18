@@ -7,6 +7,21 @@ description: Branch, commit, push and PR workflow (PR text via writing-prs) - cr
 
 Hooks enforce this: commits on `main/master/develop/release/production`, pushes to them, force pushes, `--no-verify`, `git add -A && git commit` in one command, and secret files in the index are all blocked.
 
+## 0. New project: bootstrap the repository
+When the project folder has no git repository yet, set it up yourself; don't ask the user to. Run each command **as its own Bash call**, in this order:
+```bash
+mkdir -p <project-folder>        # if it doesn't exist
+cd <project-folder>
+git init -b main
+git commit --allow-empty -m "chore: initial commit"
+gh repo create <repo-name> --private --source . --remote origin --push   # only if the user wants a GitHub repo or wants it shipped
+git switch -c <type>/<short-kebab-slug>
+```
+- `git init` and `gh` run outside the sandbox only when they stand alone. Chained (`cd x && git init`), the sandbox stops `git init` from writing `.git/config`, and `gh` can't read its token, so it looks logged out.
+- The guard allows exactly this one commit on `main`: the empty first commit of a repository with no commits. `gh repo create --push` may publish `main` only while it holds just that commit. That gives the feature branch a base for its PR.
+- Never `--public`: the guard refuses public repositories. Use `--private` (or `--internal` for an organisation).
+- If `gh repo create` fails, run `gh auth status` alone. Ask the user for `! gh auth login` only if that fails too.
+
 ## 1. Start: get onto a feature branch
 ```bash
 git status --short && git branch --show-current
@@ -67,7 +82,7 @@ git commit -m "chore(deps): bump httpx to 0.28"
 ```bash
 git push origin HEAD
 ```
-- Run it **on its own**: no `&&`, no pipe (`| tail`), no `-u`. A bare `git push` runs outside the sandbox with your credentials. Chained or piped commands, and `-u` (which writes `.git/config`), get blocked by the sandbox.
+- Run it **on its own**: no `&&`, no pipe (`| tail`), no `-u`. The same goes for every `gh` command: `cd` in a separate call first. A bare `git push` runs outside the sandbox with your credentials. Chained or piped commands, and `-u` (which writes `.git/config`), get blocked by the sandbox.
 - `gh pr create` uses `--head` explicitly, so the branch doesn't need upstream tracking.
 If the remote has diverged on your own branch: `git pull --rebase origin <branch>`, rerun tests, push again (`--force-with-lease` only on your own feature branch, and only after a rebase you did).
 
