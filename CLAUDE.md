@@ -26,7 +26,7 @@ Ruff: line length 120, py311, rules `E F I B UP S D` with Google docstrings (`D`
 **Agents (`plugin/agents/*.md`).**
 - `orchestrator`: the main session (Opus). It sizes tasks XS/S/M/L, delegates, routes review fixes back to the owning worker via `SendMessage`, and ships.
 - `worker`: Sonnet, 1–3 in parallel, never commits.
-- `reviewer`: Opus, read-only, gets only the base branch and the user's verbatim request, so it reviews the code cold, then checks it against the request.
+- `reviewer`: Opus, read-only, launched with only the base branch so it reviews the code cold; then sent the user's verbatim request (SendMessage) to check the change against it.
 - `explorer`: Haiku, read-only search.
 
 The workflow lives in `orchestrator.md`. The hooks enforce the parts that must not depend on the prompt.
@@ -43,8 +43,8 @@ These are aimed at the *target* projects remi runs in, not at this repo.
 | Script | Event | Role |
 |---|---|---|
 | `guard.py` | PreToolUse (Read/Edit/Write/Grep/Glob/Bash) | secret paths, env dumps, dangerous git, protected branches, Conventional Commits (via `conventional_commits.py`), no Claude attribution |
-| `agent_policy.py` | PreToolUse Agent (`pre`), SubagentStart (`start`), UserPromptSubmit (`prompt`) | only `remi:worker/reviewer/explorer` allowed; worker slot cap `REMI_MAX_WORKERS` tracked per agent id with `fcntl` locks; reviewer prompt = one base-branch line + user messages quoted verbatim in `<request>` blocks (recorded by `prompt`) |
-| `quality.py` | `edit` / `worker` / `review` / `commit` modes | format+lint per edit, per-worker gate on stop, pre-review gate (all workers done, whole change green), commit gate (secret/IBAN/Luhn scan, naming, format, lint, tests) |
+| `agent_policy.py` | PreToolUse Agent (`pre`), SubagentStart (`start`), UserPromptSubmit (`prompt`), PreToolUse SendMessage (`message`) | only `remi:worker/reviewer/explorer` allowed; worker slot cap `REMI_MAX_WORKERS` tracked per agent id with `fcntl` locks; reviewer launched blind (one base-branch line), then sent the user's messages verbatim in `<request>` blocks (recorded by `prompt`); a new reviewer makes that request check due until sent |
+| `quality.py` | `edit` / `worker` / `review` / `commit` modes | format+lint per edit, per-worker gate on stop, pre-review gate (all workers done, whole change green), commit gate (request check sent, secret/IBAN/Luhn scan, naming, format, lint, tests) |
 | `claude_md.py` | PreToolUse Write/Edit/MultiEdit/Bash | CLAUDE.md ≤ `REMI_CLAUDE_MD_MAX_LINES` (200), computed on the resulting file |
 | `scope.py`, `naming.py` | helpers | legacy-safe: existing files are checked only on changed lines; no single-letter names |
 | `onboard.py`, `statusline.py` | launcher / status line | not hooks |
