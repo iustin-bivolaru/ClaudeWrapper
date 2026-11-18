@@ -6,3 +6,6 @@ __pycache__/
 .env
 .env.*
 !.env.example
+
+# local IDE MCP config (machine-specific port)
+.mcp.json
