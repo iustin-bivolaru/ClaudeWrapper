@@ -141,7 +141,7 @@ def test_malformed_payload_fails_closed():
 
 def test_malformed_payload_ignored_outside_pre_tool():
     assert dispatch_raw("post-tool", stdin="not json").returncode == 0
-    assert dispatch_raw("prompt", stdin="[1]").returncode == 0
+    assert dispatch_raw("subagent-stop", stdin="[1]").returncode == 0
 
 
 def test_unknown_event_blocks():
@@ -260,26 +260,6 @@ def test_commit_gate_checks_the_repository_it_runs_in(repo, tmp_path, subdirecto
     assert "AWS access key" in result.stderr
 
 
-def test_edit_hook_scopes_to_the_edited_files_repository(repo, tmp_path):
-    # The session runs in a parent folder. The edited file's own repository decides which
-    # lines are new (and where ruff and [tool.remi] come from), so the untouched legacy name
-    # `x` is not reported.
-    legacy = repo / "legacy.py"
-    legacy.write_text("x = 1\n")
-    git(repo, "add", "legacy.py")
-    git(repo, "commit", "-qm", "legacy")
-    legacy.write_text("x = 1\ntotal_amount = 2\n")
-    payload = tool("Edit", cwd=tmp_path.parent, file_path=str(legacy))
-    env = {"PATH": "/usr/bin:/bin", "HOME": str(tmp_path), "REMI_STATE_DIR": str(tmp_path / "state")}
-    result = run_hook("post-tool", payload, env=env | {"CLAUDE_PROJECT_DIR": str(tmp_path.parent)})
-    assert result.returncode == 0, result.stderr
-    legacy.write_text("x = 1\ny = 2\n")
-    result = run_hook("post-tool", payload, env=env | {"CLAUDE_PROJECT_DIR": str(tmp_path.parent)})
-    assert result.returncode == 2
-    assert "'y'" in result.stderr
-    assert "'x'" not in result.stderr
-
-
 def test_commit_gate_allow_marker_and_clean_commit(repo):
     git(repo, "switch", "-qc", "feat/x")
     (repo / "fixture.txt").write_text("card = '4111111111111111'  # remi: allow-secret\nplain text\n")
@@ -300,46 +280,12 @@ def test_commit_gate_runs_project_override(repo):
 # --- agent policy -------------------------------------------------------------
 
 
-def test_general_purpose_agent_redirected(tmp_path):
+def test_general_purpose_agent_blocked(tmp_path):
     payload = tool("Agent", subagent_type="general-purpose", prompt="x")
     payload["session_id"] = tmp_path.name
     result = run_hook("pre-tool", payload)
     assert result.returncode == 2
-    assert "remi:worker" in result.stderr
-
-
-def worker_event(session: str, agent_id: str, event: str) -> dict:
-    return {"session_id": session, "agent_type": "remi:worker", "agent_id": agent_id, "hook_event_name": event}
-
-
-def test_worker_cap(tmp_path):
-    session = f"cap-{tmp_path.name}"
-    pre = tool("Agent", subagent_type="remi:worker", prompt="x")
-    pre["session_id"] = session
-    env = {"TMPDIR": str(tmp_path), "REMI_MAX_WORKERS": "2", "PATH": "/usr/bin:/bin"}
-    assert run_hook("pre-tool", pre, env=env).returncode == 0
-    assert run_hook("subagent-start", worker_event(session, "agent-one", "SubagentStart"), env=env).returncode == 0
-    assert run_hook("pre-tool", pre, env=env).returncode == 0  # pending, not started yet
-    assert run_hook("pre-tool", pre, env=env).returncode == 2  # 1 active + 1 pending = limit
-    run_hook("subagent-start", worker_event(session, "agent-two", "SubagentStart"), env=env)
-    run_hook("subagent-stop", worker_event(session, "agent-one", "SubagentStop"), env=env)
-    assert run_hook("pre-tool", pre, env=env).returncode == 0
-
-
-def test_resumed_worker_does_not_free_other_slots(tmp_path):
-    session = f"resume-{tmp_path.name}"
-    pre = tool("Agent", subagent_type="remi:worker", prompt="x")
-    pre["session_id"] = session
-    env = {"TMPDIR": str(tmp_path), "REMI_MAX_WORKERS": "2", "PATH": "/usr/bin:/bin"}
-    for agent_id in ("agent-one", "agent-two"):
-        run_hook("pre-tool", pre, env=env)
-        run_hook("subagent-start", worker_event(session, agent_id, "SubagentStart"), env=env)
-    # agent-one finishes, then is resumed with SendMessage for review fixes (no PreToolUse)
-    run_hook("subagent-stop", worker_event(session, "agent-one", "SubagentStop"), env=env)
-    run_hook("subagent-start", worker_event(session, "agent-one", "SubagentStart"), env=env)
-    assert run_hook("pre-tool", pre, env=env).returncode == 2  # still 2 running
-    run_hook("subagent-stop", worker_event(session, "agent-one", "SubagentStop"), env=env)
-    assert run_hook("pre-tool", pre, env=env).returncode == 0
+    assert "remi:worker" in result.stderr and "general-purpose" in result.stderr
 
 
 def test_explore_and_reviewer_allowed(tmp_path, repo):
@@ -347,138 +293,6 @@ def test_explore_and_reviewer_allowed(tmp_path, repo):
         payload = tool("Agent", repo, subagent_type=agent, prompt="x")
         payload["session_id"] = tmp_path.name
         assert run_hook("pre-tool", payload).returncode == 0
-
-
-# --- reviewer: blind code review, then the verbatim request ---------------------------
-
-REQUEST = "Reject transfers over the daily limit,\nexcept for internal accounts."
-BASE_LINE = "Review the changes against `main`."
-CHECK_LINE = "Check the change against the user's request."
-
-
-def review_env(tmp_path: Path) -> dict:
-    return {"REMI_STATE_DIR": str(tmp_path / "state"), "PATH": "/usr/bin:/bin", "HOME": str(tmp_path)}
-
-
-def reviewer_launch(prompt: str, session: str, env: dict):
-    payload = tool("Agent", subagent_type="remi:reviewer", prompt=prompt)
-    payload["session_id"] = session
-    return run_hook("pre-tool", payload, env=env)
-
-
-def record_prompt(message: str, session: str, env: dict) -> None:
-    payload = {"session_id": session, "hook_event_name": "UserPromptSubmit", "prompt": message}
-    assert run_hook("prompt", payload, env=env).returncode == 0
-
-
-def start_reviewer(session: str, agent_id: str, env: dict) -> None:
-    payload = {"session_id": session, "agent_type": "remi:reviewer", "agent_id": agent_id}
-    assert run_hook("subagent-start", payload, env=env).returncode == 0
-
-
-def send_message(to: str, message: str, session: str, env: dict):
-    payload = tool("SendMessage", to=to, message=message)
-    payload["session_id"] = session
-    return run_hook("pre-tool", payload, env=env)
-
-
-def commit_payload(repo: Path, session: str) -> dict:
-    payload = tool("Bash", cwd=repo, command="git commit -m 'feat: x'")
-    payload["session_id"] = session
-    return payload
-
-
-def test_blind_reviewer_launch_allowed(tmp_path):
-    env = review_env(tmp_path)
-    record_prompt(REQUEST, "blind", env)
-    result = reviewer_launch(BASE_LINE, "blind", env)
-    assert result.returncode == 0, result.stderr
-
-
-def test_reviewer_launch_with_request_blocked(tmp_path):
-    env = review_env(tmp_path)
-    record_prompt(REQUEST, "early", env)
-    result = reviewer_launch(f"{BASE_LINE}\n<request>{REQUEST}</request>", "early", env)
-    assert result.returncode == 2
-    assert "blind" in result.stderr
-
-
-@pytest.mark.parametrize(
-    "prompt",
-    [
-        f"{BASE_LINE}\nThe worker added a daily limit in transfers.py.",
-        f"{BASE_LINE} " + "Context: " * 40,
-    ],
-)
-def test_reviewer_launch_with_context_blocked(tmp_path, prompt):
-    result = reviewer_launch(prompt, "context", review_env(tmp_path))
-    assert result.returncode == 2
-    assert "no context" in result.stderr
-
-
-def test_request_check_with_verbatim_quote_allowed(tmp_path):
-    env = review_env(tmp_path)
-    record_prompt(REQUEST, "verbatim", env)
-    record_prompt("go", "verbatim", env)
-    start_reviewer("verbatim", "reviewer-one", env)
-    rewrapped = "Reject transfers over the daily limit, except\n  for internal accounts."
-    message = f"{CHECK_LINE}\n\n<request>\n{rewrapped}\n</request>\n<request>go</request>"
-    result = send_message("reviewer-one", message, "verbatim", env)
-    assert result.returncode == 0, result.stderr
-
-
-def test_request_check_with_paraphrase_blocked(tmp_path):
-    env = review_env(tmp_path)
-    record_prompt(REQUEST, "paraphrase", env)
-    start_reviewer("paraphrase", "reviewer-one", env)
-    result = send_message("reviewer-one", f"{CHECK_LINE}\n<request>Add a daily limit.</request>", "paraphrase", env)
-    assert result.returncode == 2
-    assert "verbatim" in result.stderr
-
-
-def test_request_check_with_context_blocked(tmp_path):
-    env = review_env(tmp_path)
-    record_prompt(REQUEST, "reasons", env)
-    start_reviewer("reasons", "reviewer-one", env)
-    message = f"{CHECK_LINE}\n<request>{REQUEST}</request>\nWe read 'daily' as per transaction."
-    result = send_message("reviewer-one", message, "reasons", env)
-    assert result.returncode == 2
-    assert "no context" in result.stderr
-
-
-def test_messages_to_workers_not_checked(tmp_path):
-    env = review_env(tmp_path)
-    record_prompt(REQUEST, "worker-msg", env)
-    result = send_message("worker-one", "Fix these findings:\n- a.py:3\n<request>made up</request>", "worker-msg", env)
-    assert result.returncode == 0, result.stderr
-
-
-def test_commit_refused_until_request_check_sent(repo, tmp_path):
-    env = review_env(tmp_path)
-    git(repo, "switch", "-qc", "feat/x")
-    (repo / "notes.txt").write_text("plain text\n")
-    git(repo, "add", "notes.txt")
-    record_prompt(REQUEST, "gate", env)
-    start_reviewer("gate", "reviewer-one", env)
-    result = run_hook("pre-tool", commit_payload(repo, "gate"), env=env)
-    assert result.returncode == 2
-    assert "reviewer-one" in result.stderr
-    start_reviewer("gate", "reviewer-one", env)  # resumed by SendMessage: not a new review
-    assert send_message("reviewer-one", f"{CHECK_LINE}\n<request>{REQUEST}</request>", "gate", env).returncode == 0
-    result = run_hook("pre-tool", commit_payload(repo, "gate"), env=env)
-    assert result.returncode == 0, result.stderr
-    start_reviewer("gate", "reviewer-two", env)  # second review: due again
-    assert run_hook("pre-tool", commit_payload(repo, "gate"), env=env).returncode == 2
-
-
-def test_commit_allowed_without_review_or_user_messages(repo, tmp_path):
-    env = review_env(tmp_path)
-    git(repo, "switch", "-qc", "feat/x")
-    (repo / "notes.txt").write_text("plain text\n")
-    git(repo, "add", "notes.txt")
-    start_reviewer("silent", "reviewer-one", env)  # no recorded user message: nothing to check against
-    result = run_hook("pre-tool", commit_payload(repo, "silent"), env=env)
-    assert result.returncode == 0, result.stderr
 
 
 # --- attribution ----------------------------------------------------------------
@@ -504,217 +318,13 @@ def test_plain_pr_allowed(repo):
     assert run_hook("pre-tool", tool("Bash", cwd=repo, command=command)).returncode == 0
 
 
-# --- naming -----------------------------------------------------------------------
-
-BAD_NAMES_SOURCE = """
-import numpy as n
-
-
-def f(x):
-    total = 0
-    for i in range(x):
-        total += i
-    try:
-        pass
-    except ValueError as e:
-        raise
-    return [v for v in range(3)], lambda q: q
-"""
-
-GOOD_NAMES_SOURCE = """
-from typing import TypeVar
-
-T = TypeVar("T")
-
-
-def sum_attempts(max_attempts: int) -> int:
-    total_attempts = 0
-    for attempt_number in range(max_attempts):
-        total_attempts += attempt_number
-    for _ in range(2):
-        pass
-    return total_attempts
-"""
-
-
-def test_naming_flags_single_letters(tmp_path):
-    source_file = tmp_path / "bad.py"
-    source_file.write_text(BAD_NAMES_SOURCE)
-    result = subprocess.run(
-        [sys.executable, str(SCRIPTS / "naming.py"), str(source_file)], capture_output=True, text=True, check=False
-    )
-    assert result.returncode == 1
-    for name in ("'n'", "'f'", "'x'", "'i'", "'e'", "'v'", "'q'"):
-        assert name in result.stdout, name
-
-
-def test_naming_accepts_descriptive_names(tmp_path):
-    source_file = tmp_path / "good.py"
-    source_file.write_text(GOOD_NAMES_SOURCE)
-    result = subprocess.run(
-        [sys.executable, str(SCRIPTS / "naming.py"), str(source_file)], capture_output=True, text=True, check=False
-    )
-    assert result.returncode == 0, result.stdout
-
-
-def test_edit_hook_reports_single_letters(tmp_path):
-    source_file = tmp_path / "service.py"
-    source_file.write_text('def compute(x: int) -> int:\n    """Double it."""\n    return x * 2\n')
-    payload = tool("Edit", cwd=tmp_path, file_path=str(source_file))
-    result = run_hook("post-tool", payload, cwd=tmp_path)
-    assert result.returncode == 2
-    assert "'x'" in result.stderr
-
-
-def test_commit_gate_blocks_single_letters(repo):
-    git(repo, "switch", "-qc", "feat/x")
-    (repo / "module.py").write_text("for i in range(3):\n    print(i)\n")
-    git(repo, "add", "module.py")
-    result = run_hook("pre-tool", tool("Bash", cwd=repo, command="git commit -m 'feat: x'"))
-    assert result.returncode == 2
-    assert "single-letter variable 'i'" in result.stderr
-
-
 def test_project_defined_agents_blocked(tmp_path):
     for agent in ("layering-reviewer", "migration-reviewer", "agent-prompt-reviewer"):
         payload = tool("Agent", subagent_type=agent, prompt="x")
         payload["session_id"] = tmp_path.name
         result = run_hook("pre-tool", payload)
         assert result.returncode == 2, agent
-        assert "not part of remi" in result.stderr
-
-
-# --- pipeline: worker stop and pre-review gates ------------------------------------
-
-
-def pipeline_env(tmp_path: Path) -> dict:
-    return {"TMPDIR": str(tmp_path / "state"), "PATH": "/usr/bin:/bin", "HOME": str(tmp_path)}
-
-
-def start_worker(session: str, agent_id: str, env: dict) -> None:
-    pre = tool("Agent", subagent_type="remi:worker", prompt="x")
-    pre["session_id"] = session
-    run_hook("pre-tool", pre, env=env)
-    run_hook("subagent-start", worker_event(session, agent_id, "SubagentStart"), env=env)
-
-
-def worker_stop(repo: Path, session: str, agent_id: str) -> dict:
-    payload = worker_event(session, agent_id, "SubagentStop")
-    payload["cwd"] = str(repo)
-    return payload
-
-
-def test_worker_gate_defers_tests_while_others_run(repo, tmp_path):
-    (tmp_path / "state").mkdir()
-    env = pipeline_env(tmp_path)
-    (repo / "pyproject.toml").write_text('[tool.remi]\ntest = "exit 3"\n')
-    (repo / "tests").mkdir()
-    start_worker("deferred", "agent-one", env)
-    start_worker("deferred", "agent-two", env)
-    result = run_hook("subagent-stop", worker_stop(repo, "deferred", "agent-one"), env=env)
-    assert result.returncode == 0, result.stderr  # agent-two still running: tests wait for the review gate
-
-
-def test_last_worker_runs_tests(repo, tmp_path):
-    (tmp_path / "state").mkdir()
-    env = pipeline_env(tmp_path)
-    (repo / "pyproject.toml").write_text('[tool.remi]\ntest = "exit 3"\n')
-    (repo / "tests").mkdir()
-    start_worker("last", "agent-one", env)
-    result = run_hook("subagent-stop", worker_stop(repo, "last", "agent-one"), env=env)
-    assert result.returncode == 2
-    assert "Tests are red" in result.stderr
-
-
-def test_review_refused_while_workers_run(repo, tmp_path):
-    (tmp_path / "state").mkdir()
-    env = pipeline_env(tmp_path)
-    start_worker("busy", "agent-one", env)
-    payload = tool("Agent", cwd=repo, subagent_type="remi:reviewer", prompt="Review main...feat/x")
-    payload["session_id"] = "busy"
-    result = run_hook("pre-tool", payload, env=env)
-    assert result.returncode == 2
-    assert "still running" in result.stderr
-
-
-def test_review_runs_fix_then_gate(repo, tmp_path):
-    (tmp_path / "state").mkdir()
-    env = pipeline_env(tmp_path)
-    (repo / "pyproject.toml").write_text('[tool.remi]\nfix = "touch fixed.marker"\ntest = "test -f fixed.marker"\n')
-    (repo / "tests").mkdir()
-    payload = tool("Agent", cwd=repo, subagent_type="remi:reviewer", prompt="Review main...feat/x")
-    payload["session_id"] = "green"
-    result = run_hook("pre-tool", payload, env=env)
-    assert result.returncode == 0, result.stderr
-    assert (repo / "fixed.marker").exists()
-
-
-def test_review_refused_when_tests_red(repo, tmp_path):
-    (tmp_path / "state").mkdir()
-    env = pipeline_env(tmp_path)
-    (repo / "pyproject.toml").write_text('[tool.remi]\nfix = "true"\ntest = "exit 3"\n')
-    (repo / "tests").mkdir()
-    payload = tool("Agent", cwd=repo, subagent_type="remi:reviewer", prompt="Review main...feat/x")
-    payload["session_id"] = "red"
-    result = run_hook("pre-tool", payload, env=env)
-    assert result.returncode == 2
-    assert "review is refused" in result.stderr
-
-
-def test_default_worker_cap_is_three(tmp_path):
-    session = f"default-cap-{tmp_path.name}"
-    pre = tool("Agent", subagent_type="remi:worker", prompt="x")
-    pre["session_id"] = session
-    env = {"TMPDIR": str(tmp_path), "PATH": "/usr/bin:/bin"}
-    for _ in range(3):
-        assert run_hook("pre-tool", pre, env=env).returncode == 0
-    result = run_hook("pre-tool", pre, env=env)
-    assert result.returncode == 2
-    assert "limit 3" in result.stderr
-
-
-# --- conventional commits ---------------------------------------------------------
-
-
-@pytest.mark.parametrize(
-    "command",
-    [
-        "git commit -m 'feat: add compound interest'",
-        "git commit -m 'fix(payments): reject negative amounts' -m 'Amounts below zero were booked as credits.'",
-        "git commit -m 'feat(api)!: drop the v1 statements endpoint'",
-        "git commit --message='docs: describe the outbox retry policy'",
-        "git commit -m 'chore(deps): bump httpx to 0.28'",
-        "git commit -m 'refactor: rename IBAN validator'",
-        "git commit --amend --no-edit",
-        """git commit -m "$(cat <<'EOF'\nfeat: add fx rates\n\nWhy it matters.\nEOF\n)\"""",
-    ],
-)
-def test_conventional_commit_allowed(repo, command):
-    git(repo, "switch", "-qc", "feat/x")
-    result = run_hook("pre-tool", tool("Bash", cwd=repo, command=command))
-    assert result.returncode == 0, result.stderr
-
-
-@pytest.mark.parametrize(
-    ("command", "reason"),
-    [
-        ("git commit -m 'add compound interest'", "isn't '<type>"),
-        ("git commit -m 'feature: add compound interest'", "must be one of"),
-        ("git commit -m 'Feat: add compound interest'", "isn't '<type>"),
-        ("git commit -m 'feat:add compound interest'", "isn't '<type>"),
-        ("git commit -m 'feat(Payments): add transfers'", "isn't '<type>"),
-        ("git commit -m 'fix: reject negative amounts.'", "period"),
-        ("git commit -m 'fix: Rejected negative amounts'", "lowercase"),
-        ("git commit -m 'feat: " + "x" * 120 + "'", "characters"),
-        ("git commit", "pass the commit message with -m"),
-        ("git commit -F message.txt", "pass the commit message with -m"),
-    ],
-)
-def test_non_conventional_commit_blocked(repo, command, reason):
-    git(repo, "switch", "-qc", "feat/x")
-    result = run_hook("pre-tool", tool("Bash", cwd=repo, command=command))
-    assert result.returncode == 2, command
-    assert reason in result.stderr, result.stderr
+        assert "part of remi" in result.stderr
 
 
 @pytest.mark.parametrize(
@@ -727,13 +337,12 @@ def test_plain_pr_title_allowed(repo, title):
     assert run_hook("pre-tool", tool("Bash", cwd=repo, command=command)).returncode == 0
 
 
-def test_plan_subagent_redirected_to_orchestrator(tmp_path):
+def test_plan_subagent_blocked(tmp_path):
     payload = tool("Agent", subagent_type="Plan", prompt="design it")
     payload["session_id"] = tmp_path.name
     result = run_hook("pre-tool", payload, env={"REMI_STATE_DIR": str(tmp_path), "PATH": "/usr/bin:/bin"})
     assert result.returncode == 2
-    assert "designs the plan itself" in result.stderr
-    assert "ExitPlanMode" in result.stderr
+    assert "expensive session model" in result.stderr
 
 
 # --- CLAUDE.md line limit -------------------------------------------------------------
@@ -811,33 +420,13 @@ def test_claude_md_shell_reads_allowed(command):
     assert run_hook("pre-tool", tool("Bash", command=command)).returncode == 0
 
 
-def test_commit_gate_blocks_long_claude_md(repo):
-    git(repo, "switch", "-qc", "feat/x")
-    (repo / "CLAUDE.md").write_text(lines_of(250))
-    git(repo, "add", "CLAUDE.md")
-    result = run_hook("pre-tool", tool("Bash", cwd=repo, command="git commit -m 'docs: add claude.md'"))
-    assert result.returncode == 2
-    assert "CLAUDE.md has 250 lines (limit 200)" in result.stderr
-
-
-def test_builtin_explore_redirected_to_cheap_explorer(tmp_path):
+def test_builtin_explore_blocked(tmp_path):
     payload = tool("Agent", subagent_type="Explore", prompt="find the settings module")
     payload["session_id"] = tmp_path.name
     result = run_hook("pre-tool", payload, env={"REMI_STATE_DIR": str(tmp_path), "PATH": "/usr/bin:/bin"})
     assert result.returncode == 2
     assert "remi:explorer" in result.stderr
     assert "Grep and Read yourself" in result.stderr
-
-
-def test_explorer_does_not_take_a_worker_slot(tmp_path):
-    env = {"REMI_STATE_DIR": str(tmp_path), "REMI_MAX_WORKERS": "1", "PATH": "/usr/bin:/bin"}
-    explorer = tool("Agent", subagent_type="remi:explorer", prompt="x")
-    worker = tool("Agent", subagent_type="remi:worker", prompt="x")
-    for payload in (explorer, worker):
-        payload["session_id"] = "slots"
-    assert run_hook("pre-tool", explorer, env=env).returncode == 0
-    assert run_hook("pre-tool", explorer, env=env).returncode == 0
-    assert run_hook("pre-tool", worker, env=env).returncode == 0
 
 
 # --- legacy-safe checks ------------------------------------------------------------
@@ -890,13 +479,11 @@ def test_edit_in_legacy_file_ignores_untouched_legacy_code(legacy_repo):
 
 def test_edit_in_legacy_file_flags_only_new_violations(legacy_repo):
     legacy_file = legacy_repo / "legacy.py"
-    legacy_file.write_text(
-        LEGACY_SOURCE + '\n\ndef add_fee(a: int) -> int:\n    """Add the fee."""\n    return a + 1\n'
-    )
+    legacy_file.write_text(LEGACY_SOURCE + "\n\ndef add_fee(amount: int) -> int:\n    return amount + 1\n")
     result = run_hook("post-tool", edit_payload(legacy_repo, "legacy.py"), cwd=legacy_repo)
     assert result.returncode == 2
-    assert "'a'" in result.stderr
-    assert "'x'" not in result.stderr and "'i'" not in result.stderr  # pre-existing names aren't reported
+    assert "legacy.py:7:5: D103" in result.stderr  # the new function has no docstring
+    assert "legacy.py:1:" not in result.stderr  # the legacy one isn't reported
 
 
 def test_edit_in_legacy_file_formats_only_changed_range(legacy_repo):
@@ -913,7 +500,7 @@ def test_new_file_is_checked_in_full(legacy_repo):
     (legacy_repo / "fresh.py").write_text("def compute(x):\n    return x\n")
     result = run_hook("post-tool", edit_payload(legacy_repo, "fresh.py"), cwd=legacy_repo)
     assert result.returncode == 2
-    assert "D103" in result.stderr and "'x'" in result.stderr
+    assert "D103" in result.stderr
 
 
 def test_commit_gate_passes_clean_change_in_legacy_file(legacy_repo):
@@ -929,87 +516,6 @@ def test_commit_gate_refuses_unformatted_change_in_legacy_file(legacy_repo):
     result = run_hook("pre-tool", tool("Bash", cwd=legacy_repo, command="git commit -m 'feat: add x'"))
     assert result.returncode == 2
     assert "format failed" in result.stderr and "legacy.py" in result.stderr
-
-
-# --- remi onboard -----------------------------------------------------------------
-
-
-@pytest.fixture
-def onboarding_repo(repo: Path) -> Path:
-    (repo / "legacy.py").write_text(LEGACY_SOURCE)
-    (repo / ".gitignore").write_text(".env\n")
-    (repo / ".env").write_text("DB_PASSWORD=sentinel-secret-value\n")
-    (repo / ".env.production").write_text("API_TOKEN=committed-secret-value\n")
-    (repo / "CLAUDE.md").write_text(lines_of(250))
-    (repo / ".claude" / "agents").mkdir(parents=True)
-    (repo / ".claude" / "agents" / "layering-reviewer.md").write_text("---\nname: layering-reviewer\n---\n")
-    (repo / ".claude" / "skills" / "naming").mkdir(parents=True)
-    (repo / ".claude" / "skills" / "naming" / "SKILL.md").write_text("---\nname: naming\n---\n")
-    hooks = {
-        "hooks": {
-            "PostToolUse": [
-                {
-                    "matcher": "Edit",
-                    "hooks": [{"type": "command", "command": '"$CLAUDE_PROJECT_DIR"/.claude/hooks/ruff_on_edit.sh'}],
-                }
-            ]
-        }
-    }
-    (repo / ".claude" / "settings.json").write_text(json.dumps(hooks))
-    (repo / "pyproject.toml").write_text(
-        '[[tool.uv.index]]\nname = "corp"\nurl = "https://user@nexus.corp.example/simple"\n'
-    )
-    git(repo, "add", "legacy.py", ".gitignore", ".env.production", "CLAUDE.md", ".claude", "pyproject.toml")
-    git(repo, "commit", "-qm", "chore: legacy project")
-    return repo
-
-
-def run_onboard(repo: Path, *arguments: str) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        [sys.executable, str(SCRIPTS / "onboard.py"), *arguments],
-        cwd=repo,
-        capture_output=True,
-        text=True,
-        check=False,
-        stdin=subprocess.DEVNULL,
-    )
-
-
-def test_onboard_reports_project_state(onboarding_repo):
-    result = run_onboard(onboarding_repo, "--no-prompt")
-    assert result.returncode == 0, result.stderr
-    report = result.stdout
-    assert "CLAUDE.md: 250 lines (limit 200)" in report
-    assert "layering-reviewer: blocked under remi" in report
-    assert "same name as a remi skill: naming" in report
-    assert "duplicates remi's lint/format hook" in report
-    assert ".env.production is committed to git" in report
-    assert "git-ignored and unreadable for remi: .env" in report
-    assert "no .env.example" in report
-    assert "nexus.corp.example" in report and "allowlist" in report
-    assert "single-letter names: 3" in report  # f, x, i
-    assert "ruff format: 1 file(s) not formatted" in report
-    assert "remi --plan" in report
-
-
-def test_onboard_never_reads_secret_values(onboarding_repo):
-    result = run_onboard(onboarding_repo, "--no-prompt")
-    combined = result.stdout + result.stderr + run_onboard(onboarding_repo, "--print-prompt").stdout
-    assert "sentinel-secret-value" not in combined
-    assert "committed-secret-value" not in combined
-
-
-def test_onboard_prompt_carries_findings(onboarding_repo):
-    prompt = run_onboard(onboarding_repo, "--print-prompt").stdout
-    assert prompt.startswith("Onboard remi to this repository.")
-    assert "CLAUDE.md: 250 lines" in prompt
-    assert "service-architecture" in prompt and "chore/remi-onboarding" in prompt
-
-
-def test_onboard_outside_git(tmp_path):
-    result = run_onboard(tmp_path)
-    assert result.returncode == 2
-    assert "inside a git repository" in result.stderr
 
 
 # --- credential commands stand alone; new repositories bootstrap themselves --------
@@ -1136,6 +642,10 @@ def test_launcher_starts_when_github_ready(tmp_path, scopes):
 # --- merge gate: only after APPROVE + MATCHES, on exactly the reviewed files -------------
 
 
+def review_env(tmp_path: Path) -> dict:
+    return {"REMI_STATE_DIR": str(tmp_path / "state"), "PATH": "/usr/bin:/bin", "HOME": str(tmp_path)}
+
+
 def reviewer_stops(repo: Path, session: str, agent_id: str, message: str, env: dict) -> None:
     payload = {
         "session_id": session,
@@ -1151,7 +661,6 @@ def reviewed_change(repo: Path, tmp_path: Path, verdict: str = "APPROVE", reques
     env = review_env(tmp_path)
     git(repo, "switch", "-qc", "feat/x")
     (repo / "service.py").write_text("ANSWER = 42\n")
-    start_reviewer("merge", "reviewer-one", env)
     reviewer_stops(repo, "merge", "reviewer-one", f"VERDICT: {verdict}\n- [severity: low] ...", env)
     reviewer_stops(repo, "merge", "reviewer-one", f"Request check:\nREQUEST: {request}", env)
     git(repo, "add", "service.py")
@@ -1208,18 +717,11 @@ def test_merge_after_change_since_review_blocked(repo, tmp_path):
     assert "service.py" in result.stderr
 
 
-def test_merge_blocked_while_newer_review_unfinished(repo, tmp_path):
-    env = reviewed_change(repo, tmp_path)
-    start_reviewer("merge", "reviewer-two", env)
-    assert merge(repo, env).returncode == 2
-
-
 def test_uncommitted_stray_file_does_not_block_merge(repo, tmp_path):
     env = review_env(tmp_path)
     git(repo, "switch", "-qc", "feat/x")
     (repo / "service.py").write_text("ANSWER = 42\n")
     (repo / "scratch.txt").write_text("notes\n")
-    start_reviewer("merge", "reviewer-one", env)
     reviewer_stops(repo, "merge", "reviewer-one", "VERDICT: APPROVE", env)
     reviewer_stops(repo, "merge", "reviewer-one", "REQUEST: MATCHES", env)
     git(repo, "add", "service.py")
@@ -1232,7 +734,6 @@ def test_verdict_read_from_transcript_when_message_missing(repo, tmp_path):
     env = review_env(tmp_path)
     git(repo, "switch", "-qc", "feat/x")
     (repo / "service.py").write_text("ANSWER = 42\n")
-    start_reviewer("merge", "reviewer-one", env)
     transcript = tmp_path / "agent.jsonl"
     for text in ("VERDICT: APPROVE", "REQUEST: MATCHES"):
         entry = {"type": "assistant", "message": {"content": [{"type": "text", "text": text}]}}

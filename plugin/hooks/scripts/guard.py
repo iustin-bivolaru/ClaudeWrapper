@@ -24,7 +24,6 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).parent))
 
 from _common import ALLOW, block, is_secret_path, working_dir  # noqa: E402
-from conventional_commits import commit_header, header_problems  # noqa: E402
 
 PROTECTED_BRANCHES = frozenset({"main", "master", "develop", "release", "production"})
 SHELL_OPERATORS = frozenset({";", "&", "|"})
@@ -78,6 +77,24 @@ DESTRUCTIVE_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = tuple(
         ),
     )
 )
+
+
+ALLOWED_AGENT_TYPES = frozenset({"remi:worker", "remi:reviewer", "remi:explorer"})
+"""Built-in subagents (general-purpose, Plan, Explore) inherit the expensive session model."""
+
+
+def check_agent(subagent_type: str) -> None:
+    """Allow only remi's own subagents.
+
+    Args:
+        subagent_type: The Agent call's ``subagent_type`` (empty means general-purpose).
+    """
+    if subagent_type not in ALLOWED_AGENT_TYPES:
+        block(
+            f"subagent '{subagent_type or 'general-purpose'}' would run on the expensive session model or isn't "
+            "part of remi. Use remi:worker (implementation), remi:explorer (broad search) or remi:reviewer (review); "
+            "for a targeted lookup, Grep and Read yourself."
+        )
 
 
 def check_path(path: str | None, action: str) -> None:
@@ -257,23 +274,6 @@ def check_git_policy(command: str, cwd: Path) -> None:
             )
 
 
-def check_conventional_commit(command: str) -> None:
-    """Require Conventional Commits headers for commit messages (PR titles are plain sentences).
-
-    Args:
-        command: Raw shell command line.
-    """
-    example = "e.g. git commit -m 'feat(payments): add SEPA instant transfers' -m '<why>'"
-    if re.search(r"\bgit\s+commit\b", command):
-        header = commit_header(command)
-        if header == "":
-            block(f"pass the commit message with -m so it can be checked against Conventional Commits ({example}).")
-        if header:
-            problems = header_problems(header)
-            if problems:
-                block("commit message isn't a Conventional Commit: " + "; ".join(problems) + f". ({example})")
-
-
 def check_bash(command: str, cwd: Path) -> None:
     """Run all shell-command checks.
 
@@ -297,7 +297,6 @@ def check_bash(command: str, cwd: Path) -> None:
             block(f"{why}. Ask the user to run it themselves if it is really needed.")
     check_standalone(command)
     check_git_policy(command, cwd)
-    check_conventional_commit(command)
 
 
 def check(payload: dict[str, Any]) -> int:
@@ -326,4 +325,6 @@ def check(payload: dict[str, Any]) -> int:
         check_path(args.get("path"), "listing")
     elif tool == "Bash":
         check_bash(str(args.get("command", "")), working_dir(payload))
+    elif tool == "Agent":
+        check_agent(str(args.get("subagent_type") or ""))
     return ALLOW
