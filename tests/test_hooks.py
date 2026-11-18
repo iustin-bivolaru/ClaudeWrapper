@@ -1012,39 +1012,47 @@ def test_repo_create_push_only_with_bootstrap_main(new_repo):
     assert "bootstrap" in result.stderr
 
 
-# --- workers and the reviewer never run at the same time ----------------------------
+# --- launcher: GitHub login is required ------------------------------------------------
+
+LAUNCHER = SCRIPTS.parents[2] / "bin" / "remi"
+SCOPED_RESPONSE = "HTTP/2.0 200 OK\nX-Oauth-Scopes: {scopes}\n\n{{}}"
 
 
-def stop_reviewer(session: str, agent_id: str, env: dict) -> None:
-    payload = {"session_id": session, "agent_type": "remi:reviewer", "agent_id": agent_id, "cwd": "/tmp"}
-    assert run_hook("quality.py", payload, "worker", env=env).returncode == 0
+def run_launcher(tmp_path: Path, gh_script: str | None):
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir(exist_ok=True)
+    (fake_bin / "claude").write_text("#!/bin/sh\necho CLAUDE STARTED\n")
+    (fake_bin / "claude").chmod(0o755)
+    if gh_script is not None:
+        (fake_bin / "gh").write_text(f"#!/bin/sh\n{gh_script}\n")
+        (fake_bin / "gh").chmod(0o755)
+    env = {
+        "PATH": f"{fake_bin}:/usr/bin:/bin",
+        "HOME": str(tmp_path),
+        "XDG_CONFIG_HOME": str(tmp_path / "config"),
+        "REMI_NO_BANNER": "1",
+    }
+    return subprocess.run(["bash", str(LAUNCHER)], capture_output=True, text=True, env=env, cwd=tmp_path, check=False)
 
 
-def test_no_worker_while_reviewer_runs(tmp_path):
-    env = review_env(tmp_path)
-    start_worker("overlap", "worker-one", env)
-    run_hook("agent_policy.py", worker_event("overlap", "worker-one", "SubagentStop"), "stop", env=env)
-    start_reviewer("overlap", "reviewer-one", env)
-    launch = tool("Agent", subagent_type="remi:worker", prompt="x")
-    launch["session_id"] = "overlap"
-    result = run_hook("agent_policy.py", launch, "pre", env=env)
-    assert result.returncode == 2
-    assert "reviewer is still running" in result.stderr
-    assert send_message("worker-one", "Fix a.py:3", "overlap", env).returncode == 2
-    stop_reviewer("overlap", "reviewer-one", env)
-    result = send_message("worker-one", "Fix a.py:3", "overlap", env)
+@pytest.mark.parametrize(
+    ("gh_script", "reason"),
+    [
+        (None, "'gh' is required"),
+        ("exit 1", "gh auth login"),
+        (f"printf '{SCOPED_RESPONSE.format(scopes='gist, read:org')}'", "gh auth refresh"),
+    ],
+)
+def test_launcher_requires_github(tmp_path, gh_script, reason):
+    result = run_launcher(tmp_path, gh_script)
+    assert result.returncode == 1
+    assert reason in result.stderr
+    assert "CLAUDE STARTED" not in result.stdout
+
+
+@pytest.mark.parametrize("scopes", ["gist, read:org, repo", None])
+def test_launcher_starts_when_github_ready(tmp_path, scopes):
+    response = SCOPED_RESPONSE.format(scopes=scopes) if scopes else "HTTP/2.0 200 OK\\n\\n{}"
+    result = run_launcher(tmp_path, f"printf '{response}'")
     assert result.returncode == 0, result.stderr
-
-
-def test_no_reviewer_message_while_worker_runs(tmp_path):
-    env = review_env(tmp_path)
-    record_prompt(REQUEST, "busy-worker", env)
-    start_reviewer("busy-worker", "reviewer-one", env)
-    stop_reviewer("busy-worker", "reviewer-one", env)
-    start_worker("busy-worker", "worker-one", env)
-    message = f"{CHECK_LINE}\n<request>{REQUEST}</request>"
-    result = send_message("reviewer-one", message, "busy-worker", env)
-    assert result.returncode == 2
-    assert "still running" in result.stderr
-    run_hook("agent_policy.py", worker_event("busy-worker", "worker-one", "SubagentStop"), "stop", env=env)
-    assert send_message("reviewer-one", message, "busy-worker", env).returncode == 0
+    assert "CLAUDE STARTED" in result.stdout

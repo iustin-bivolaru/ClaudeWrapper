@@ -122,11 +122,11 @@ def check_git(root: Path, report: Report) -> None:
     else:
         report.add(OK, "working tree clean")
     if not shutil.which("gh"):
-        report.add(WARN, "GitHub CLI 'gh' not installed: remi can't open PRs (brew install gh)")
-        report.next_steps.append("brew install gh && gh auth login")
-    elif subprocess.run(["gh", "auth", "status"], capture_output=True, check=False).returncode != 0:
-        report.add(WARN, "gh is not logged in: run 'gh auth login' so remi can open PRs")
-        report.next_steps.append("gh auth login")
+        report.add(FAIL, "GitHub CLI 'gh' not installed: remi won't start without it (brew install gh)")
+        report.next_steps.append("brew install gh && gh auth login -h github.com")
+    elif subprocess.run(["gh", "auth", "status", "-h", "github.com"], capture_output=True, check=False).returncode != 0:
+        report.add(FAIL, "gh is not logged in to github.com: remi won't start until it is")
+        report.next_steps.append("gh auth login -h github.com")
     else:
         report.add(OK, "gh is installed and logged in")
 

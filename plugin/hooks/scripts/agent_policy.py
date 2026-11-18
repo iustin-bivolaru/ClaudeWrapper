@@ -18,12 +18,6 @@ orchestrator must send that reviewer the user's messages, quoted verbatim in
 ``<request>`` blocks, with SendMessage. The commit gate refuses to commit while
 the check is due (see ``request_check_due``).
 
-Workers and the reviewer never run at the same time: the reviewer must see a
-diff that isn't changing under it. The pre-review gate (``quality.py review``)
-refuses a review while workers run; this hook refuses a new worker, or a
-message to a worker, while a reviewer runs, and a message to a reviewer while
-workers run.
-
 Running workers = pending reservations + active slots. Active slots are keyed by
 agent id, so a worker that is resumed with SendMessage (for example for review
 fixes) re-registers under the same id: it is never counted twice, and it never
@@ -61,8 +55,6 @@ ALLOWED_AGENT_TYPES = frozenset({"remi:worker", "remi:reviewer", "remi:explorer"
 REQUEST_BLOCK = re.compile(r"<request>(.*?)</request>", re.DOTALL)
 REQUESTS_FILE = "user-requests.json"
 REVIEWERS_DIRECTORY = "reviewers"
-RUNNING_REVIEWERS_DIRECTORY = "reviewers-running"
-AGENT_TYPES_DIRECTORY = "agent-types"
 REQUEST_CHECK_DUE_FILE = "request-check-due"
 MAX_RECORDED_REQUESTS = 50
 MAX_REVIEWER_LINE_CHARS = 200
@@ -197,93 +189,6 @@ def _has_context(text: str) -> bool:
     return len(outside) > 1 or any(len(line) > MAX_REVIEWER_LINE_CHARS for line in outside)
 
 
-def _state_subdirectory(payload: dict[str, Any], name: str) -> Path:
-    """Return a per-session state subdirectory, creating it when missing.
-
-    Args:
-        payload: Hook payload (scopes state to the session).
-        name: Subdirectory name.
-
-    Returns:
-        The existing directory.
-    """
-    directory = state_dir(payload) / name
-    directory.mkdir(exist_ok=True)
-    return directory
-
-
-def running_reviewers(payload: dict[str, Any]) -> list[str]:
-    """Return the agent ids of reviewers that are running now.
-
-    Entries older than ``SLOT_TTL_SECONDS`` are treated as leaked and dropped.
-
-    Args:
-        payload: Hook payload (scopes state to the session).
-
-    Returns:
-        The running reviewers' agent ids.
-    """
-    now = time.time()
-    running = []
-    for entry in _state_subdirectory(payload, RUNNING_REVIEWERS_DIRECTORY).iterdir():
-        if now - entry.stat().st_mtime > SLOT_TTL_SECONDS:
-            entry.unlink(missing_ok=True)
-        else:
-            running.append(entry.name)
-    return running
-
-
-def _running_workers(payload: dict[str, Any]) -> int:
-    """Count workers that are running or about to start.
-
-    Args:
-        payload: Hook payload (scopes state to the session).
-
-    Returns:
-        Pending reservations plus active worker slots.
-    """
-    with slots_locked(payload) as (pending_directory, active_directory):
-        return len(_oldest(pending_directory)) + len(_oldest(active_directory))
-
-
-def _agent_type_of(payload: dict[str, Any], agent_id: str) -> str:
-    """Look up the type a subagent started with.
-
-    Args:
-        payload: Hook payload (scopes state to the session).
-        agent_id: Sanitised agent id.
-
-    Returns:
-        The recorded agent type, or "" when the id is unknown.
-    """
-    try:
-        return (_state_subdirectory(payload, AGENT_TYPES_DIRECTORY) / agent_id).read_text().strip()
-    except OSError:
-        return ""
-
-
-def _refuse_worker_while_reviewing(payload: dict[str, Any]) -> None:
-    """Refuse to start or message a worker while a reviewer runs.
-
-    Args:
-        payload: Hook payload (scopes state to the session).
-    """
-    if running_reviewers(payload):
-        block(
-            "the reviewer is still running. Workers and the reviewer never run at the same time: wait for the "
-            "code review and the request check to come back, then send all the findings to the workers."
-        )
-
-
-def reviewer_stopped(payload: dict[str, Any]) -> None:
-    """Mark a reviewer as no longer running.
-
-    Args:
-        payload: SubagentStop payload for a reviewer.
-    """
-    (_state_subdirectory(payload, RUNNING_REVIEWERS_DIRECTORY) / _slot_name(payload)).unlink(missing_ok=True)
-
-
 def _check_reviewer_launch(payload: dict[str, Any]) -> None:
     """Refuse a reviewer launch that carries context or the request.
 
@@ -343,19 +248,8 @@ def on_message(payload: dict[str, Any]) -> int:
     """
     tool_input = payload.get("tool_input") or {}
     recipient = re.sub(r"[^\w-]", "_", str(tool_input.get("to") or ""))
-    if not recipient:
+    if not recipient or not (_reviewer_ids(payload) / recipient).exists():
         return ALLOW
-    if _agent_type_of(payload, recipient).endswith("worker"):
-        _refuse_worker_while_reviewing(payload)
-        return ALLOW
-    if not (_reviewer_ids(payload) / recipient).exists():
-        return ALLOW
-    workers = _running_workers(payload)
-    if workers:
-        block(
-            f"{workers} worker(s) still running. The reviewer only gets messages once every worker has finished, "
-            "so it never reads a diff that is still changing."
-        )
     message = str(tool_input.get("message") or "")
     quotes = [_normalise(quote) for quote in REQUEST_BLOCK.findall(message)]
     if not quotes:
@@ -437,7 +331,6 @@ def on_pre(payload: dict[str, Any]) -> int:
         _check_reviewer_launch(payload)
     if not agent_type.endswith("worker"):
         return ALLOW
-    _refuse_worker_while_reviewing(payload)
     with slots_locked(payload) as (pending_directory, active_directory):
         running = len(_oldest(pending_directory)) + len(_oldest(active_directory))
         if running >= max_workers():
@@ -475,11 +368,8 @@ def on_start(payload: dict[str, Any]) -> int:
     Returns:
         Always 0.
     """
-    agent_type = str(payload.get("agent_type", ""))
-    (_state_subdirectory(payload, AGENT_TYPES_DIRECTORY) / _slot_name(payload)).write_text(agent_type)
-    if agent_type.endswith("reviewer"):
+    if str(payload.get("agent_type", "")).endswith("reviewer"):
         _register_reviewer(payload)
-        (_state_subdirectory(payload, RUNNING_REVIEWERS_DIRECTORY) / _slot_name(payload)).touch()
     if not _is_worker(payload):
         return ALLOW
     with slots_locked(payload) as (pending_directory, active_directory):

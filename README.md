@@ -19,9 +19,12 @@ A cost-aware, security-hardened layer over Claude Code for client work in bankin
 
 ```bash
 ./install.sh                 # symlinks bin/remi into ~/.local/bin
+brew install gh && gh auth login -h github.com   # required
 brew install gitleaks        # optional: stronger secret scan at commit time
 ```
 Requires `claude`, `python3` (3.11+), and `uv` or `ruff`/`pytest` available in the target project.
+
+**GitHub is required.** remi creates repos, commits, pushes and opens PRs itself, so `remi` refuses to start unless `gh` is logged in to github.com with a token that has the `repo` scope. If it isn't, the launcher tells you exactly what to run (`gh auth login -h github.com`, or `gh auth refresh -h github.com -s repo`). `remi onboard` reports the same problem as a failure. The permission allow list already covers `git init`, `git commit`, `git push`, `gh repo create` (private only) and `gh pr create/edit`, so none of them prompt.
 
 ## Use
 
@@ -163,7 +166,6 @@ So one fixed line in an old module stays a one-line diff, and workers don't spen
 | After every Edit/Write of a `.py` file | `ruff check --fix` + `ruff format` (scoped as above), then lint (changed lines) with the docstring, pep8-naming, no-f-strings-in-logs (`G004`) and no-relative-imports (`TID252`) rules, plus the single-letter-name check; leftover issues go back to the agent |
 | When a worker tries to finish | `ruff check --fix` + `ruff format` + lint + naming on **the files that worker edited**, so it is never blocked by another worker's half-finished files. Tests run only if it is the last worker still running. The worker keeps going while red. |
 | Before `remi:reviewer` starts | Every worker must be finished. Then `ruff check --fix` + `ruff format` on the whole change, followed by naming → format check → lint → typecheck → tests. If anything is red, the review is refused and the failures go to the workers. |
-| While `remi:reviewer` runs | No worker may start or get a message, and the reviewer gets no message while a worker runs, so the reviewer never reads a diff that is still changing. |
 | When `remi:reviewer` is launched | Its prompt must be one base-branch line. Explanations, plans and your request are refused, so the code review is blind. |
 | When the request goes to the reviewer (`SendMessage`) | One instruction line plus your messages quoted word for word in `<request>` blocks (your messages are recorded by a `UserPromptSubmit` hook). Explanations, plans and reworded quotes are refused. |
 | Before `git commit` | request check sent to the latest reviewer (if one ran) → secret scan → naming (staged files) → format check → lint → tests; the commit is refused on failure |
