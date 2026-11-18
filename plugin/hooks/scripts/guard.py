@@ -5,6 +5,12 @@ Blocks (exit 2) any tool call that would read, write, search or shell out to
 secret material (.env files, keys, cloud credentials, environment dumps) and
 any git operation that bypasses the branch workflow (commits on main, force
 pushes, ``--no-verify``). The guard fails closed: a malformed payload blocks.
+
+Commands that need the user's credentials (``gh``, ``git push/pull/fetch``) and
+``git init`` run outside the sandbox only when they stand alone, so the guard
+refuses them inside a chain or pipe. A brand-new repository may get exactly one
+empty bootstrap commit on its protected branch, published with
+``gh repo create --push``, so that feature branches have a base to open PRs on.
 """
 
 from __future__ import annotations
@@ -22,6 +28,8 @@ from _common import ALLOW, block, is_secret_path, project_dir, read_payload  # n
 from conventional_commits import commit_header, header_problems  # noqa: E402
 
 PROTECTED_BRANCHES = frozenset({"main", "master", "develop", "release", "production"})
+SHELL_OPERATORS = frozenset({";", "&", "|"})
+UNSANDBOXED_GIT_COMMANDS = frozenset({"push", "pull", "fetch", "init"})
 
 # Shell constructs that dump the environment or read secrets indirectly.
 ENV_DUMP_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = tuple(
@@ -131,6 +139,87 @@ def current_branch(cwd: Path) -> str | None:
     return out.stdout.strip() or None
 
 
+def _git_output(cwd: Path, *args: str) -> tuple[int, str]:
+    """Run a read-only git command.
+
+    Args:
+        cwd: Directory to run git in.
+        *args: Git arguments.
+
+    Returns:
+        ``(exit code, stdout)``; ``(1, "")`` when git can't run.
+    """
+    try:
+        out = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, timeout=5, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return 1, ""
+    return out.returncode, out.stdout.strip()
+
+
+def is_bootstrap_commit(command: str, cwd: Path) -> bool:
+    """Tell whether a commit is the empty first commit of a brand-new repository.
+
+    Args:
+        command: Raw shell command line.
+        cwd: Directory the command runs in.
+
+    Returns:
+        True when HEAD has no commits yet, nothing is staged and the commit is ``--allow-empty``.
+    """
+    if not re.search(r"\s--allow-empty\b", command):
+        return False
+    head_code, _ = _git_output(cwd, "rev-parse", "-q", "--verify", "HEAD")
+    staged_code, staged = _git_output(cwd, "diff", "--cached", "--name-only")
+    return head_code != 0 and staged_code == 0 and not staged
+
+
+def is_bootstrap_head(cwd: Path) -> bool:
+    """Tell whether the branch holds only the empty bootstrap commit.
+
+    Args:
+        cwd: Directory of the repository.
+
+    Returns:
+        True when HEAD is a single root commit that changes no files.
+    """
+    count_code, count = _git_output(cwd, "rev-list", "--count", "HEAD")
+    files_code, files = _git_output(cwd, "show", "--name-only", "--format=", "HEAD")
+    return count_code == 0 and count == "1" and files_code == 0 and not files
+
+
+def check_standalone(command: str) -> None:
+    """Refuse credential commands inside a chain or pipe.
+
+    The sandbox runs ``gh``, ``git push/pull/fetch`` and ``git init`` outside it only
+    when the whole command starts with them. Chained, they run sandboxed: ``gh`` can't
+    read its token from the keychain (so it reports being logged out) and ``git init``
+    can't write ``.git/config``.
+
+    Args:
+        command: Raw shell command line.
+    """
+    segments: list[list[str]] = [[]]
+    for word in shell_words(command):
+        if word in SHELL_OPERATORS:
+            segments.append([])
+        else:
+            segments[-1].append(word)
+    segments = [segment for segment in segments if segment]
+    if len(segments) < 2:
+        return
+    for segment in segments:
+        words = [word for word in segment if not re.match(r"^\w+=", word)]
+        if not words:
+            continue
+        subcommand = next((word for word in words[1:] if not word.startswith("-")), "")
+        if words[0] == "gh" or (words[0] == "git" and subcommand in UNSANDBOXED_GIT_COMMANDS):
+            block(
+                f"run `{' '.join(words[:3])}` on its own: no `&&`, `;` or pipe, and `cd` in a separate call first. "
+                "Only a standalone command runs outside the sandbox with the user's credentials. Chained, `gh` "
+                "can't read its token (it looks logged out) and `git init` can't write .git/config."
+            )
+
+
 def check_git_policy(command: str, cwd: Path) -> None:
     """Enforce the feature-branch workflow for git commands.
 
@@ -138,13 +227,21 @@ def check_git_policy(command: str, cwd: Path) -> None:
         command: Raw shell command line.
         cwd: Directory the command runs in.
     """
+    if re.search(r"\bgh\s+repo\s+create\b.*\s--push\b", command):
+        pushed_branch = current_branch(cwd)
+        if pushed_branch in PROTECTED_BRANCHES and not is_bootstrap_head(cwd):
+            block(
+                f"`gh repo create --push` would publish '{pushed_branch}' with real commits. It may only push the "
+                "empty bootstrap commit of a new repository; push your work on a feature branch and open a PR."
+            )
+
     if not re.search(r"\bgit\b", command):
         return
     switches_branch = re.search(r"\bgit\s+(checkout\s+-[bB]|switch\s+-[cC])\b", command)
     branch = current_branch(cwd)
 
     if re.search(r"\bgit\s+commit\b", command) and not switches_branch:
-        if branch in PROTECTED_BRANCHES:
+        if branch in PROTECTED_BRANCHES and not is_bootstrap_commit(command, cwd):
             block(
                 f"committing directly on '{branch}' is not allowed. Create a branch first: "
                 "git switch -c <type>/<short-slug>"
@@ -199,6 +296,7 @@ def check_bash(command: str, cwd: Path) -> None:
     for pattern, why in DESTRUCTIVE_PATTERNS:
         if pattern.search(command):
             block(f"{why}. Ask the user to run it themselves if it is really needed.")
+    check_standalone(command)
     check_git_policy(command, cwd)
     check_conventional_commit(command)
 

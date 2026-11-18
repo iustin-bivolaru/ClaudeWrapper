@@ -21,7 +21,7 @@ Ruff: line length 120, py311, rules `E F I B UP S D` with Google docstrings (`D`
 
 ## Architecture
 
-**Launcher (`bin/remi`, bash).** Resolves `REMI_*` config (CLI flag > env > `~/.config/remi/config` > default) and validates it. Agent frontmatter is static, so it renders a **content-addressed copy of `plugin/`** into `~/.cache/remi/plugin-<cksum>` with the worker/reviewer/explorer `model`, `effort` and `maxTurns` filled in. Then it runs `claude --plugin-dir <copy> --settings settings/settings.json --agent remi:orchestrator`. It also translates `--plan` into `--permission-mode plan` and passes claude subcommands (`mcp`, `config`, …) straight through. Consequence: editing `plugin/` changes the hash, so the next `remi` launch picks it up automatically.
+**Launcher (`bin/remi`, bash).** Resolves `REMI_*` config (CLI flag > env > `~/.config/remi/config` > default) and validates it. Agent frontmatter is static, so it renders a **content-addressed copy of `plugin/`** into `~/.cache/remi/plugin-<cksum>` with the worker/reviewer/explorer `model`, `effort` and `maxTurns` filled in. Then it runs `claude --plugin-dir <copy> --settings settings/settings.json --agent remi:orchestrator`. It refuses to start unless `gh` is logged in to github.com with the `repo` scope (`gh api --include user`). It also translates `--plan` into `--permission-mode plan` and passes claude subcommands (`mcp`, `config`, …) straight through. Consequence: editing `plugin/` changes the hash, so the next `remi` launch picks it up automatically.
 
 **Agents (`plugin/agents/*.md`).**
 - `orchestrator`: the main session (Opus). It sizes tasks XS/S/M/L, delegates, routes review fixes back to the owning worker via `SendMessage`, and ships.
@@ -42,7 +42,7 @@ These are aimed at the *target* projects remi runs in, not at this repo.
 
 | Script | Event | Role |
 |---|---|---|
-| `guard.py` | PreToolUse (Read/Edit/Write/Grep/Glob/Bash) | secret paths, env dumps, dangerous git, protected branches, Conventional Commits (via `conventional_commits.py`), no Claude attribution |
+| `guard.py` | PreToolUse (Read/Edit/Write/Grep/Glob/Bash) | secret paths, env dumps, dangerous git, protected branches (except a new repo's empty first commit and its `gh repo create --push`), `gh`/`git push/pull/fetch/init` only standalone (else sandboxed), Conventional Commits (via `conventional_commits.py`), no Claude attribution |
 | `agent_policy.py` | PreToolUse Agent (`pre`), SubagentStart (`start`), UserPromptSubmit (`prompt`), PreToolUse SendMessage (`message`) | only `remi:worker/reviewer/explorer` allowed; worker slot cap `REMI_MAX_WORKERS` tracked per agent id with `fcntl` locks; reviewer launched blind (one base-branch line), then sent the user's messages verbatim in `<request>` blocks (recorded by `prompt`); a new reviewer makes that request check due until sent |
 | `quality.py` | `edit` / `worker` / `review` / `commit` modes | format+lint per edit, per-worker gate on stop, pre-review gate (all workers done, whole change green), commit gate (request check sent, secret/IBAN/Luhn scan, naming, format, lint, tests) |
 | `claude_md.py` | PreToolUse Write/Edit/MultiEdit/Bash | CLAUDE.md ≤ `REMI_CLAUDE_MD_MAX_LINES` (200), computed on the resulting file |

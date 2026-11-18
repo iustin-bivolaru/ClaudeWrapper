@@ -935,3 +935,124 @@ def test_onboard_outside_git(tmp_path):
     result = run_onboard(tmp_path)
     assert result.returncode == 2
     assert "inside a git repository" in result.stderr
+
+
+# --- credential commands stand alone; new repositories bootstrap themselves --------
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cd ~/proj && gh auth status",
+        "ls; gh repo view",
+        "gh pr list | head -5",
+        "cd ~/proj && git init -b main",
+        "git add a.txt && git push origin HEAD",
+        "GH_PAGER= gh pr view && echo done",
+    ],
+)
+def test_chained_credential_commands_blocked(repo, command):
+    result = run_hook("guard.py", tool("Bash", cwd=repo, command=command))
+    assert result.returncode == 2
+    assert "on its own" in result.stderr
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "gh auth status",
+        'gh pr create --title "Add limits" --body "a | b; c && d" --head feat/x',
+        "git status --short && git diff --stat",
+        "git log --oneline | grep push",
+        "git init -b main",
+    ],
+)
+def test_standalone_credential_commands_allowed(repo, command):
+    git(repo, "switch", "-qc", "feat/x")
+    result = run_hook("guard.py", tool("Bash", cwd=repo, command=command))
+    assert result.returncode == 0, result.stderr
+
+
+@pytest.fixture
+def new_repo(tmp_path: Path) -> Path:
+    git(tmp_path, "init", "-q", "-b", "main")
+    git(tmp_path, "config", "user.email", "t@example.com")
+    git(tmp_path, "config", "user.name", "t")
+    return tmp_path
+
+
+def test_bootstrap_commit_on_new_repo_allowed(new_repo):
+    command = 'git commit --allow-empty -m "chore: initial commit"'
+    result = run_hook("guard.py", tool("Bash", cwd=new_repo, command=command))
+    assert result.returncode == 0, result.stderr
+
+
+def test_bootstrap_commit_with_staged_files_blocked(new_repo):
+    (new_repo / "app.py").write_text("print('hi')\n")
+    git(new_repo, "add", "app.py")
+    command = 'git commit --allow-empty -m "chore: initial commit"'
+    assert run_hook("guard.py", tool("Bash", cwd=new_repo, command=command)).returncode == 2
+
+
+def test_second_empty_commit_on_main_blocked(new_repo):
+    git(new_repo, "commit", "-q", "--allow-empty", "-m", "chore: initial commit")
+    command = 'git commit --allow-empty -m "chore: another"'
+    assert run_hook("guard.py", tool("Bash", cwd=new_repo, command=command)).returncode == 2
+
+
+def test_repo_create_push_only_with_bootstrap_main(new_repo):
+    command = "gh repo create svc --private --source . --remote origin --push"
+    git(new_repo, "commit", "-q", "--allow-empty", "-m", "chore: initial commit")
+    assert run_hook("guard.py", tool("Bash", cwd=new_repo, command=command)).returncode == 0
+    (new_repo / "app.py").write_text("print('hi')\n")
+    git(new_repo, "add", "app.py")
+    git(new_repo, "commit", "-qm", "feat: app")
+    result = run_hook("guard.py", tool("Bash", cwd=new_repo, command=command))
+    assert result.returncode == 2
+    assert "bootstrap" in result.stderr
+
+
+# --- launcher: GitHub login is required ------------------------------------------------
+
+LAUNCHER = SCRIPTS.parents[2] / "bin" / "remi"
+SCOPED_RESPONSE = "HTTP/2.0 200 OK\nX-Oauth-Scopes: {scopes}\n\n{{}}"
+
+
+def run_launcher(tmp_path: Path, gh_script: str | None):
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir(exist_ok=True)
+    (fake_bin / "claude").write_text("#!/bin/sh\necho CLAUDE STARTED\n")
+    (fake_bin / "claude").chmod(0o755)
+    if gh_script is not None:
+        (fake_bin / "gh").write_text(f"#!/bin/sh\n{gh_script}\n")
+        (fake_bin / "gh").chmod(0o755)
+    env = {
+        "PATH": f"{fake_bin}:/usr/bin:/bin",
+        "HOME": str(tmp_path),
+        "XDG_CONFIG_HOME": str(tmp_path / "config"),
+        "REMI_NO_BANNER": "1",
+    }
+    return subprocess.run(["bash", str(LAUNCHER)], capture_output=True, text=True, env=env, cwd=tmp_path, check=False)
+
+
+@pytest.mark.parametrize(
+    ("gh_script", "reason"),
+    [
+        (None, "'gh' is required"),
+        ("exit 1", "gh auth login"),
+        (f"printf '{SCOPED_RESPONSE.format(scopes='gist, read:org')}'", "gh auth refresh"),
+    ],
+)
+def test_launcher_requires_github(tmp_path, gh_script, reason):
+    result = run_launcher(tmp_path, gh_script)
+    assert result.returncode == 1
+    assert reason in result.stderr
+    assert "CLAUDE STARTED" not in result.stdout
+
+
+@pytest.mark.parametrize("scopes", ["gist, read:org, repo", None])
+def test_launcher_starts_when_github_ready(tmp_path, scopes):
+    response = SCOPED_RESPONSE.format(scopes=scopes) if scopes else "HTTP/2.0 200 OK\\n\\n{}"
+    result = run_launcher(tmp_path, f"printf '{response}'")
+    assert result.returncode == 0, result.stderr
+    assert "CLAUDE STARTED" in result.stdout

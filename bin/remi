@@ -155,6 +155,23 @@ for argument in "$@"; do
   previous_argument="$argument"
 done
 
+# --- GitHub: required, because remi creates repos, pushes and opens PRs itself -----------
+# The launcher runs outside the sandbox, so gh can read its token from the keychain here.
+command -v gh >/dev/null || {
+  echo "remi: the GitHub CLI 'gh' is required (remi creates repos, pushes and opens PRs). Install it: brew install gh && gh auth login -h github.com" >&2
+  exit 1
+}
+if ! github_response="$(gh api --include --hostname github.com user 2>/dev/null)"; then
+  echo "remi: gh is not logged in to github.com (or GitHub is unreachable). Run: gh auth login -h github.com" >&2
+  exit 1
+fi
+github_scopes="$(printf '%s\n' "$github_response" | tr -d '\r' | sed -n 's/^[Xx]-[Oo][Aa][Uu][Tt][Hh]-[Ss][Cc][Oo][Pp][Ee][Ss]: *//p' | head -n 1)"
+# Classic OAuth tokens list their scopes; fine-grained tokens send no header, so GitHub enforces them itself.
+if [ -n "$github_scopes" ] && ! printf '%s\n' "$github_scopes" | tr ',' '\n' | tr -d ' ' | grep -qx repo; then
+  echo "remi: the gh token can't create repos or push (its scopes: $github_scopes). Run: gh auth refresh -h github.com -s repo" >&2
+  exit 1
+fi
+
 # --- the remi hamster: monochrome, interactive sessions only ------------------------------
 if [ -t 1 ] && [ "$is_print_mode" = false ] && [ -z "${REMI_NO_BANNER:-}" ]; then
   branch="$(git symbolic-ref --short -q HEAD 2>/dev/null || echo -)"

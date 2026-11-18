@@ -19,9 +19,12 @@ A cost-aware, security-hardened layer over Claude Code for client work in bankin
 
 ```bash
 ./install.sh                 # symlinks bin/remi into ~/.local/bin
+brew install gh && gh auth login -h github.com   # required
 brew install gitleaks        # optional: stronger secret scan at commit time
 ```
 Requires `claude`, `python3` (3.11+), and `uv` or `ruff`/`pytest` available in the target project.
+
+**GitHub is required.** remi creates repos, commits, pushes and opens PRs itself, so `remi` refuses to start unless `gh` is logged in to github.com with a token that has the `repo` scope. If it isn't, the launcher tells you exactly what to run (`gh auth login -h github.com`, or `gh auth refresh -h github.com -s repo`). `remi onboard` reports the same problem as a failure. The permission allow list already covers `git init`, `git commit`, `git push`, `gh repo create` (private only) and `gh pr create/edit`, so none of them prompt.
 
 ## Use
 
@@ -134,13 +137,14 @@ you: task ─▶ orchestrator: size it (XS/S/M/L), plan, worker map
 1. **Prompts.** Every agent is told never to touch secrets or real client data.
 2. **Permission deny rules** (`settings/settings.json`). The Read and Edit tools are denied on `.env`, `.env.local`, `.env.prod*`, …, `*.pem`/`*.key`/`*.p12`/`*.jks`, `~/.ssh`, `~/.aws`, kube, docker and npm/pypi credentials, and similar files.
 3. **PreToolUse guard** (`plugin/hooks/scripts/guard.py`). Covers Read, Edit, Write, Grep, Glob and Bash. It blocks secret paths, environment dumps (`printenv`, `env`, `/proc/*/environ`, `os.environ` in inline Python, keychain and vault reads), `sudo`, `curl | sh`, `git reset --hard`, `git clean -f`, history rewrites, and force pushes. It fails closed. `.env.example` and other template files stay readable.
-4. **OS sandbox.** It denies reads of the same secret files to every Bash process, so `grep -r` and scripts can't get at them either. Network access is limited to an allowlist (PyPI, GitHub, npm, astral). `allowUnsandboxedCommands: false` and `failIfUnavailable: true` are set. Only `git push/pull/fetch` and `gh` run outside the sandbox, because they need your credentials, and the guard still checks them. `gh repo create` is allowed, but the guard refuses public repositories (`--public`, `--visibility public`).
+4. **OS sandbox.** It denies reads of the same secret files to every Bash process, so `grep -r` and scripts can't get at them either. Network access is limited to an allowlist (PyPI, GitHub, npm, astral). `allowUnsandboxedCommands: false` and `failIfUnavailable: true` are set. Only `git push/pull/fetch`, `git init` and `gh` run outside the sandbox: the first three need your credentials, and `git init` must write `.git/config`. The guard still checks them, and refuses them inside a chain or pipe (`cd x && gh …`), because a chained command runs sandboxed: `gh` then can't read its token from the keychain and looks logged out. `gh repo create` is allowed, but the guard refuses public repositories (`--public`, `--visibility public`).
 5. **Commit gate.** Before any `git commit`, it scans the staged diff for private keys, AWS, GitHub, Slack and API tokens, JWTs, hard-coded passwords, DB URLs that contain a password, **IBANs**, and **Luhn-valid card numbers**, plus gitleaks if it is installed. A deliberate test fixture can be allowed with `# remi: allow-secret` on that line.
 6. **`bypassPermissions` mode is disabled.**
 
 ## Git workflow (enforced)
 
 - No commits on `main`/`master`/`develop`/`release`/`production`. The agent creates `feat/…`, `fix/…` and similar branches.
+- **New projects ship too.** In a folder with no repository, remi runs `git init -b main`, makes one empty `chore: initial commit` on `main`, creates the private GitHub repo with `gh repo create --private --source . --push` (if you asked for a repo or for it to be shipped), then works on a feature branch and opens the PR against `main`. The guard allows only that one empty commit on `main`, and `gh repo create --push` only while `main` holds nothing else.
 - No pushes to protected branches, no `--force` (only `--force-with-lease` on your own branch), no `--no-verify`.
 - Files are staged and committed in separate commands, so the gate checks exactly what gets committed.
 - **Conventional Commits, enforced.** Commit headers must look like `<type>(<scope>)!: <description>`. PR titles are plain, readable sentences about the outcome (e.g. `Add SEPA instant payments to transfers`), never a copied commit message. Allowed types: `feat`, `fix`, `refactor`, `perf`, `test`, `docs`, `build`, `ci`, `chore`, `style`, `revert`. The description is lowercase with no trailing period, and the header is ≤ 100 characters (72 recommended). Messages must be passed with `-m`, so editor and `-F` commits are refused.
@@ -192,7 +196,7 @@ Every `CLAUDE.md` / `CLAUDE.local.md`, at any depth, stays at or under **200 lin
 - Only `remi:worker`, `remi:reviewer` and `remi:explorer` may run. A hook refuses everything else: `general-purpose`, `Plan` and the built-in `Explore`, which all inherit Opus, and any subagents a project defines in its `.claude/agents/`.
 - **Searching:** the orchestrator greps and reads targeted ranges itself, because starting any subagent costs about 20k tokens of context. Broad sweeps go to `remi:explorer`, which runs on Haiku. A measured search cost $0.0018, while the built-in Explore would run on Opus.
 - **Turn limits:** workers 50, reviewer 25, explorer 15. A worker that hits its limit stops with a partial result, and the orchestrator continues it with `SendMessage` (which gives it a fresh budget) or re-plans. Workers are told to wind down cleanly at about two-thirds of their budget.
-- **Task sizing.** XS changes are made directly by the orchestrator, with no worker and no Opus review unless the change is security-sensitive. S uses 1 worker, M 2, L 3. `REMI_MAX_WORKERS` (3) is a hard ceiling, not a target. Related subtasks share one worker.
+- **Task sizing.** XS changes are made directly by the orchestrator, with no worker and no Opus review unless the change is security-sensitive. S uses 1 worker, M 2, L 3. A new project from scratch is at least M: one worker for the core logic and one for the project shell and API, working in parallel against an interface fixed in the plan. `REMI_MAX_WORKERS` (3) is a hard ceiling, not a target. Related subtasks share one worker.
 - **Lean workers.** Only `python-service-style` is preloaded. Other skills load when the brief asks for them. Briefs pass along facts the orchestrator already found, so workers don't search again.
 - **No duplicate checks.** Hooks lint on edit, test when a worker stops, and run everything at commit. The orchestrator doesn't rerun them in between. Slots are tracked per agent id, so a worker resumed for review fixes is never counted twice.
 - Review fixes go back to the worker that already has the context (`SendMessage`), not to a fresh one. The Opus reviewer runs a second time only if it found critical or high issues.
