@@ -61,4 +61,4 @@ Use the same shape, scaled down:
 
 ## The same principle for other prompts
 - **remi:explorer:** the question first, then where to look, then "Answer with file:line references" at the end.
-- **remi:reviewer:** stays context-free. Its brief is only the base branch, so this skill doesn't apply to it.
+- **remi:reviewer:** stays context-free. Its launch prompt is only the base branch, and its later request check is one line plus the user's words verbatim in `<request>` blocks (see the orchestrator's step 6). This skill doesn't apply to either.
