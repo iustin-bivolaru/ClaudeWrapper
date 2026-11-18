@@ -1,4 +1,5 @@
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -803,3 +804,43 @@ def test_onboard_outside_git(tmp_path):
     result = run_onboard(tmp_path)
     assert result.returncode == 2
     assert "inside a git repository" in result.stderr
+
+
+# --- status line hamster ------------------------------------------------------------------
+
+
+def load_statusline():
+    sys.path.insert(0, str(SCRIPTS))
+    import statusline
+
+    return statusline
+
+
+def test_hamster_runs_once_per_period_then_rests():
+    statusline = load_statusline()
+    frames = [statusline.hamster(float(second), "s", 30, 20) for second in range(20 * 60)]
+    visible = [frame for frame in frames if frame]
+    assert visible, "the hamster never ran"
+    assert len(visible) < 20, "the hamster should only run briefly"
+    assert all(len(frame) == 30 for frame in visible)
+    assert all("(°ᴥ°)" in frame for frame in visible)
+
+
+def test_hamster_moves_right():
+    statusline = load_statusline()
+    frames = [statusline.hamster(float(second), "s", 30, 20) for second in range(20 * 60)]
+    positions = [frame.index("(") for frame in frames if frame]
+    assert positions == sorted(positions) and positions[0] < positions[-1]
+
+
+def test_hamster_stays_home_when_disabled_or_no_room():
+    statusline = load_statusline()
+    assert not any(statusline.hamster(float(second), "s", 30, 0) for second in range(60))
+    assert not any(statusline.hamster(float(second), "s", 4, 20) for second in range(20 * 60))
+
+
+def test_statusline_respects_hamster_off(tmp_path):
+    env = {**os.environ, "REMI_HAMSTER": "0"}
+    out = run_hook("statusline.py", {"model": {"display_name": "Opus"}, "cwd": str(tmp_path)}, env=env)
+    assert out.returncode == 0
+    assert "ᴥ" not in out.stdout and "Opus" in out.stdout

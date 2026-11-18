@@ -8,7 +8,8 @@
   "statusLine": {
     "type": "command",
     "command": "python3 \"$REMI_HOME/plugin/hooks/scripts/statusline.py\"",
-    "padding": 0
+    "padding": 0,
+    "refreshInterval": 1
   },
   "permissions": {
     "disableBypassPermissionsMode": "disable",

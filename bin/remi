@@ -11,6 +11,7 @@
 #   REMI_EXPLORER_MODEL      (haiku)   REMI_EXPLORER_EFFORT     (low)
 #   REMI_WORKER_MAX_TURNS    (50)      REMI_REVIEWER_MAX_TURNS  (25)       REMI_EXPLORER_MAX_TURNS (15)
 #   REMI_MAX_WORKERS         (3)       REMI_NO_BANNER           (unset)
+#   REMI_HAMSTER             (1)       REMI_HAMSTER_EVERY       (20)       minutes between status line runs; 0 disables
 #   REMI_PERMISSION_MODE     (claude's default) starting mode: manual | acceptEdits | plan | auto
 #                          also: --plan (shortcut for --permission-mode plan), --permission-mode <mode>
 # Switch modes during a session with Shift+Tab, as in plain Claude Code.

@@ -34,6 +34,8 @@ Interactive sessions start with the remi hamster (set `REMI_NO_BANNER=1` to hide
   ▘▘ ▝▝    shift+tab cycles modes (plan · accept edits · default)
 ```
 
+Every 20 minutes or so the hamster runs across the status line (`∴(°ᴥ°)`). Set `REMI_HAMSTER_EVERY` to change the gap in minutes, or `REMI_HAMSTER=0` to keep it home.
+
 ```bash
 cd ~/work/some-client-repo
 remi                           # interactive, orchestrator on Opus
@@ -90,7 +92,7 @@ Start in a mode with `remi --plan`, `remi --permission-mode acceptEdits`, or `RE
 | Reviewer | `REMI_REVIEWER_MODEL` = `opus` | `REMI_REVIEWER_EFFORT` = `medium` | |
 | Explorer | `REMI_EXPLORER_MODEL` = `haiku` | `REMI_EXPLORER_EFFORT` = `low` | |
 
-Turn limits per agent: `REMI_WORKER_MAX_TURNS` (`50`), `REMI_REVIEWER_MAX_TURNS` (`25`) and `REMI_EXPLORER_MAX_TURNS` (`15`). The orchestrator has none: you drive the main session. Plus `REMI_MAX_WORKERS` (`3`), `REMI_PERMISSION_MODE` (starting mode) and `REMI_NO_BANNER`. Effort is one of `low`, `medium`, `high`, `xhigh` or `max`. Precedence is **CLI flag > environment > config file > default**. To make a setting persistent, put it in `~/.config/remi/config`:
+Turn limits per agent: `REMI_WORKER_MAX_TURNS` (`50`), `REMI_REVIEWER_MAX_TURNS` (`25`) and `REMI_EXPLORER_MAX_TURNS` (`15`). The orchestrator has none: you drive the main session. Plus `REMI_MAX_WORKERS` (`3`), `REMI_PERMISSION_MODE` (starting mode), `REMI_NO_BANNER`, `REMI_HAMSTER` and `REMI_HAMSTER_EVERY`. Effort is one of `low`, `medium`, `high`, `xhigh` or `max`. Precedence is **CLI flag > environment > config file > default**. To make a setting persistent, put it in `~/.config/remi/config`:
 
 ```ini
 # ~/.config/remi/config  (only REMI_* keys are read; the file is parsed, never executed)
