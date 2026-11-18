@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Merge gate: remi merges its own PR only after an approving, matching review.
 
 * ``record_review`` - called from ``quality.py worker`` when a reviewer stops. The
@@ -22,7 +21,7 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from _common import ALLOW, block, is_secret_path, project_dir, read_payload, state_dir  # noqa: E402
+from _common import ALLOW, block, is_secret_path, project_dir, state_dir  # noqa: E402
 from agent_policy import REVIEWERS_DIRECTORY, _slot_name  # noqa: E402
 
 REVIEW_STATE_FILE = "review-state.json"
@@ -52,27 +51,6 @@ def _git(root: Path, *args: str, stdin: str | None = None) -> str:
     if result.returncode != 0:
         raise RuntimeError(result.stderr.strip() or f"git {args[0]} failed")
     return result.stdout
-
-
-def repository_root(payload: dict[str, Any]) -> Path:
-    """Find the repository the session is working in.
-
-    The current directory comes first: remi may run from a parent folder (for example
-    to create a new project), where the launch directory is not the repository.
-
-    Args:
-        payload: Hook payload.
-
-    Returns:
-        The top level of the repository containing the payload's ``cwd``, else the project directory.
-    """
-    working_directory = payload.get("cwd")
-    if working_directory:
-        try:
-            return Path(_git(Path(str(working_directory)), "rev-parse", "--show-toplevel").strip())
-        except (RuntimeError, OSError, subprocess.SubprocessError):
-            pass
-    return project_dir(payload)
 
 
 def _last_message(payload: dict[str, Any]) -> str:
@@ -193,7 +171,7 @@ def record_review(payload: dict[str, Any]) -> None:
     if verdict:
         state["verdict"] = verdict.group(1)
         try:
-            state["snapshot"], state["tracked"] = working_tree_snapshot(repository_root(payload))
+            state["snapshot"], state["tracked"] = working_tree_snapshot(project_dir(payload))
         except (RuntimeError, OSError, ValueError, subprocess.SubprocessError):
             state["snapshot"], state["tracked"] = None, []
     request = REQUEST_PATTERN.search(message)
@@ -244,7 +222,7 @@ def check_merge(payload: dict[str, Any]) -> int:
             f"the latest review said VERDICT: {state.get('verdict', 'none')}, REQUEST: {state.get('request', 'none')}. "
             "remi merges only after VERDICT: APPROVE and REQUEST: MATCHES. Leave the PR open and tell the user why."
         )
-    root = repository_root(payload)
+    root = project_dir(payload)
     try:
         head = _git(root, "rev-parse", "HEAD").strip()
         committed = head_tree(root)
@@ -267,20 +245,3 @@ def check_merge(payload: dict[str, Any]) -> int:
             "(both steps) before remi merges."
         )
     return ALLOW
-
-
-def main() -> int:
-    """Run the merge gate on a PreToolUse Bash payload.
-
-    Returns:
-        Process exit code.
-    """
-    try:
-        payload = read_payload()
-    except ValueError:
-        block("malformed hook payload")
-    return check_merge(payload)
-
-
-if __name__ == "__main__":
-    sys.exit(main())

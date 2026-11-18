@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any, NoReturn
@@ -94,17 +95,49 @@ def is_secret_path(path: str) -> bool:
     return any(secret_pattern.search(normalized) for secret_pattern in SECRET_PATH_PATTERNS)
 
 
-def project_dir(payload: dict[str, Any]) -> Path:
-    """Resolve the project root for the running session.
+def working_dir(payload: dict[str, Any]) -> Path:
+    """Return the directory the tool call runs in.
 
     Args:
-        payload: The hook payload (its ``cwd`` is used as a fallback).
+        payload: The hook payload.
 
     Returns:
-        The directory Claude Code was started in.
+        The payload's ``cwd``, else the directory Claude Code was started in.
     """
-    root = os.environ.get("CLAUDE_PROJECT_DIR") or payload.get("cwd") or os.getcwd()
-    return Path(root)
+    return Path(payload.get("cwd") or os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd())
+
+
+def repository_root(start: Path) -> Path:
+    """Find the top level of the git repository that contains ``start``.
+
+    Args:
+        start: A directory inside the repository.
+
+    Returns:
+        The repository's top level, or ``start`` itself when it isn't in a repository.
+    """
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"], cwd=start, capture_output=True, text=True, timeout=30, check=False
+        )
+    except (OSError, subprocess.SubprocessError):
+        return start
+    return Path(result.stdout.strip()) if result.returncode == 0 and result.stdout.strip() else start
+
+
+def project_dir(payload: dict[str, Any]) -> Path:
+    """Resolve the repository the tool call works in.
+
+    remi may be launched in a parent folder (for example to create a new project), so the
+    repository around the call's ``cwd`` wins over the launch directory.
+
+    Args:
+        payload: The hook payload.
+
+    Returns:
+        The top level of the repository around the call's working directory.
+    """
+    return repository_root(working_dir(payload))
 
 
 def state_dir(payload: dict[str, Any]) -> Path:

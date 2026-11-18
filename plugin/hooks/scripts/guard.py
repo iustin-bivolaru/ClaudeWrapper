@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """PreToolUse guard: keeps secrets out of reach and enforces git policy.
 
 Blocks (exit 2) any tool call that would read, write, search or shell out to
@@ -24,7 +23,7 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from _common import ALLOW, block, is_secret_path, project_dir, read_payload  # noqa: E402
+from _common import ALLOW, block, is_secret_path, working_dir  # noqa: E402
 from conventional_commits import commit_header, header_problems  # noqa: E402
 
 PROTECTED_BRANCHES = frozenset({"main", "master", "develop", "release", "production"})
@@ -301,17 +300,15 @@ def check_bash(command: str, cwd: Path) -> None:
     check_conventional_commit(command)
 
 
-def main() -> int:
-    """Entry point: inspect the pending tool call and allow or block it.
+def check(payload: dict[str, Any]) -> int:
+    """Inspect a pending tool call and allow or block it.
+
+    Args:
+        payload: PreToolUse payload.
 
     Returns:
-        Process exit code (0 allows; blocking exits with 2 inside ``block``).
+        0 to allow (blocking exits with 2 inside ``block``).
     """
-    try:
-        payload = read_payload()
-    except ValueError as exc:
-        block(f"guard could not parse hook payload ({exc}); failing closed.")
-
     tool = str(payload.get("tool_name", ""))
     args: dict[str, Any] = payload.get("tool_input") or {}
 
@@ -328,9 +325,5 @@ def main() -> int:
         check_path(args.get("pattern"), "listing")
         check_path(args.get("path"), "listing")
     elif tool == "Bash":
-        check_bash(str(args.get("command", "")), project_dir(payload))
+        check_bash(str(args.get("command", "")), working_dir(payload))
     return ALLOW
-
-
-if __name__ == "__main__":
-    sys.exit(main())

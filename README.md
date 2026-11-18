@@ -234,7 +234,8 @@ plugin/                        Claude Code plugin "remi"
   skills/                      house style: python-service-style, python-docstrings, pydantic-annotated, naming, git-ship, writing-prs
                                architecture: service-architecture, agent-orchestration-architecture
                                tasks: add-api-endpoint, add-setting, add-migration, add-integration, add-outbox-job, add-sub-agent, add-agent-tool
-  hooks/hooks.json             hook wiring
-  hooks/scripts/               guard, quality gate, naming check, agent policy, status line
+  hooks/hooks.json             hook wiring: every event runs dispatch.py <event>, one process per call
+  hooks/scripts/               dispatcher, guard, quality gate, merge gate, naming check, agent policy, status line
+scripts/bench_hooks.py         measures processes and time per tool call for the current hooks.json
 tests/test_hooks.py            tests for the guards and gates
 ```
