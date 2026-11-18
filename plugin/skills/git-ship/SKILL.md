@@ -82,6 +82,7 @@ git commit -m "chore(deps): bump httpx to 0.28"
 ```bash
 git push origin HEAD
 ```
+- **If the branch already has a PR, check it's still open first:** `gh pr view --json state`. If it says `MERGED`, the push would land on a dead branch and never reach `main`. Instead, `git switch main`, `git pull --rebase origin main`, create a new branch, move your new commits onto it (`git cherry-pick <hash>`), push that, and open a new PR. If it says `CLOSED`, ask the user.
 - Run it **on its own**: no `&&`, no pipe (`| tail`), no `-u`. The same goes for every `gh` command: `cd` in a separate call first. A bare `git push` runs outside the sandbox with your credentials. Chained or piped commands, and `-u` (which writes `.git/config`), get blocked by the sandbox.
 - `gh pr create` uses `--head` explicitly, so the branch doesn't need upstream tracking.
 If the remote has diverged on your own branch: `git pull --rebase origin <branch>`, rerun tests, push again (`--force-with-lease` only on your own feature branch, and only after a rebase you did).
