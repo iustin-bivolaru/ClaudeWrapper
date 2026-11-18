@@ -1,64 +1,14 @@
 {
-  "description": "remi: secret guard, git policy, subagent cost policy, quality gate",
+  "description": "remi: secret guard, git policy, subagent policy, quality, review and merge gates (one dispatcher per event)",
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "Read|Edit|Write|MultiEdit|NotebookEdit|Grep|Glob|Bash",
+        "matcher": "Read|Edit|Write|MultiEdit|NotebookEdit|Grep|Glob|Bash|Agent|SendMessage",
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/guard.py\"",
-            "timeout": 15
-          }
-        ]
-      },
-      {
-        "matcher": "Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/quality.py\" commit",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/dispatch.py\" pre-tool",
             "timeout": 900
-          },
-          {
-            "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/merge_gate.py\"",
-            "timeout": 300
-          }
-        ]
-      },
-      {
-        "matcher": "Agent",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/agent_policy.py\" pre",
-            "timeout": 15
-          },
-          {
-            "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/quality.py\" review",
-            "timeout": 900
-          }
-        ]
-      },
-      {
-        "matcher": "SendMessage",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/agent_policy.py\" message",
-            "timeout": 15
-          }
-        ]
-      },
-      {
-        "matcher": "Write|Edit|MultiEdit|Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/claude_md.py\"",
-            "timeout": 15
           }
         ]
       }
@@ -69,8 +19,19 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/quality.py\" edit",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/dispatch.py\" post-tool",
             "timeout": 120
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/dispatch.py\" subagent-start",
+            "timeout": 15
           }
         ]
       }
@@ -80,7 +41,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/quality.py\" worker",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/dispatch.py\" subagent-stop",
             "timeout": 900
           }
         ]
@@ -91,18 +52,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/agent_policy.py\" prompt",
-            "timeout": 15
-          }
-        ]
-      }
-    ],
-    "SubagentStart": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/agent_policy.py\" start",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/dispatch.py\" prompt",
             "timeout": 15
           }
         ]

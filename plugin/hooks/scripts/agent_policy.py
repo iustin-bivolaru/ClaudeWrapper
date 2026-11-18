@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Subagent policy: cost routing and the parallel-worker cap.
 
 * ``pre``  - PreToolUse on Agent: refuse expensive general-purpose subagents
@@ -42,7 +41,7 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from _common import ALLOW, block, read_payload, state_dir  # noqa: E402
+from _common import ALLOW, block, state_dir  # noqa: E402
 
 SLOT_TTL_SECONDS = 45 * 60
 REDIRECT = {
@@ -396,23 +395,3 @@ def on_stop(payload: dict[str, Any]) -> int:
     with slots_locked(payload) as (_, active_directory):
         (active_directory / _slot_name(payload)).unlink(missing_ok=True)
     return ALLOW
-
-
-def main() -> int:
-    """Dispatch to the mode given on the command line.
-
-    Returns:
-        Process exit code.
-    """
-    mode = sys.argv[1] if len(sys.argv) > 1 else ""
-    try:
-        payload = read_payload()
-    except ValueError:
-        return ALLOW
-    handlers = {"pre": on_pre, "start": on_start, "stop": on_stop, "prompt": on_prompt, "message": on_message}
-    handler = handlers.get(mode)
-    return handler(payload) if handler else ALLOW
-
-
-if __name__ == "__main__":
-    sys.exit(main())

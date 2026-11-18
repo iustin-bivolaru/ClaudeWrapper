@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Keep every CLAUDE.md at or under ``REMI_CLAUDE_MD_MAX_LINES`` (default 200) lines.
 
 CLAUDE.md is loaded into every session's context, so each extra line costs tokens on
@@ -19,7 +18,7 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from _common import ALLOW, block, read_payload  # noqa: E402
+from _common import ALLOW, block  # noqa: E402
 
 CLAUDE_MD_NAME = re.compile(r"(^|/)CLAUDE(\.local)?\.md$")
 SHELL_WRITE = re.compile(
@@ -116,16 +115,15 @@ def overflow_message(path: str, line_count: int) -> str:
     )
 
 
-def main() -> int:
-    """Check the pending tool call against the CLAUDE.md line limit.
+def check(payload: dict[str, Any]) -> int:
+    """Check a pending tool call against the CLAUDE.md line limit.
+
+    Args:
+        payload: PreToolUse payload.
 
     Returns:
-        Exit code (blocking exits with 2 inside ``block``).
+        0 to allow (blocking exits with 2 inside ``block``).
     """
-    try:
-        payload = read_payload()
-    except ValueError:
-        return ALLOW
     tool = str(payload.get("tool_name", ""))
     tool_input: dict[str, Any] = payload.get("tool_input") or {}
     if tool == "Bash":
@@ -142,7 +140,3 @@ def main() -> int:
     if new_text is not None and count_lines(new_text) > max_lines():
         block(overflow_message(path, count_lines(new_text)))
     return ALLOW
-
-
-if __name__ == "__main__":
-    sys.exit(main())

@@ -38,15 +38,15 @@ The workflow lives in `orchestrator.md`. The hooks enforce the parts that must n
 
 These are aimed at the *target* projects remi runs in, not at this repo.
 
-**Hooks (`plugin/hooks/hooks.json` → `plugin/hooks/scripts/`).** These are standalone `python3` scripts, **standard library only** (they must run in any project without dependencies). Contract (`_common.py`): read a JSON payload from stdin; exit `0` = allow, exit `2` = block with the stderr reason fed back to Claude. Malformed input **fails closed**. Scripts import siblings via `sys.path.insert(0, Path(__file__).parent)`.
+**Hooks (`plugin/hooks/hooks.json` → `plugin/hooks/scripts/`).** One `python3` process per hook event: every entry in `hooks.json` runs `dispatch.py <event>` (`pre-tool`, `post-tool`, `subagent-start`, `subagent-stop`, `prompt`), which reads the payload once and calls the modules below in order. The first check to block wins, and modules are imported only when a check needs them. **Standard library only** (hooks must run in any project without dependencies). Contract (`_common.py`): exit `0` = allow, exit `2` = block with the stderr reason fed back to Claude. A malformed `pre-tool` payload **fails closed**. Gates find the repository from the call's `cwd` (`project_dir`), never from the launch folder.
 
-| Script | Event | Role |
+| Module | Called on | Role |
 |---|---|---|
-| `guard.py` | PreToolUse (Read/Edit/Write/Grep/Glob/Bash) | secret paths, env dumps, dangerous git, protected branches (except a new repo's empty first commit and its `gh repo create --push`), `gh`/`git push/pull/fetch/init` only standalone (else sandboxed), Conventional Commits (via `conventional_commits.py`), no Claude attribution |
-| `agent_policy.py` | PreToolUse Agent (`pre`), SubagentStart (`start`), UserPromptSubmit (`prompt`), PreToolUse SendMessage (`message`) | only `remi:worker/reviewer/explorer` allowed; worker slot cap `REMI_MAX_WORKERS` tracked per agent id with `fcntl` locks; reviewer launched blind (one base-branch line), then sent the user's messages verbatim in `<request>` blocks (recorded by `prompt`); a new reviewer makes that request check due until sent |
-| `quality.py` | `edit` / `worker` / `review` / `commit` modes | format+lint per edit, per-worker gate on stop, pre-review gate (all workers done, whole change green), commit gate (request check sent, secret/IBAN/Luhn scan, naming, format, lint, tests) |
-| `merge_gate.py` | PreToolUse Bash; `record_review` called by `quality.py worker` when a reviewer stops | `gh pr merge` only after the latest reviewer's `VERDICT: APPROVE` + `REQUEST: MATCHES`, HEAD equal to the reviewed snapshot (path → blob id), `--match-head-commit` = HEAD, never `--admin` |
-| `claude_md.py` | PreToolUse Write/Edit/MultiEdit/Bash | CLAUDE.md ≤ `REMI_CLAUDE_MD_MAX_LINES` (200), computed on the resulting file |
+| `guard.py` | `pre-tool`: Read/Edit/Write/Grep/Glob/Bash | secret paths, env dumps, dangerous git, protected branches (except a new repo's empty first commit and its `gh repo create --push`), `gh`/`git push/pull/fetch/init` only standalone (else sandboxed), Conventional Commits (via `conventional_commits.py`), no Claude attribution |
+| `agent_policy.py` | `pre-tool` Agent/SendMessage, `subagent-start`, `prompt` | only `remi:worker/reviewer/explorer` allowed; worker slot cap `REMI_MAX_WORKERS` tracked per agent id with `fcntl` locks; reviewer launched blind (one base-branch line), then sent the user's messages verbatim in `<request>` blocks (recorded by `prompt`); a new reviewer makes that request check due until sent |
+| `quality.py` | `post-tool`, `subagent-stop`, `pre-tool` Agent (review) and Bash (commit) | format+lint per edit, per-worker gate on stop, pre-review gate (all workers done, whole change green), commit gate (request check sent, secret/IBAN/Luhn scan, naming, format, lint, tests) |
+| `merge_gate.py` | `pre-tool` Bash; `record_review` when a reviewer stops | `gh pr merge` only after the latest reviewer's `VERDICT: APPROVE` + `REQUEST: MATCHES`, HEAD equal to the reviewed snapshot (path → blob id), `--match-head-commit` = HEAD, never `--admin` |
+| `claude_md.py` | `pre-tool` Write/Edit/MultiEdit/Bash | CLAUDE.md ≤ `REMI_CLAUDE_MD_MAX_LINES` (200), computed on the resulting file |
 | `scope.py`, `naming.py` | helpers | legacy-safe: existing files are checked only on changed lines; no single-letter names |
 | `onboard.py`, `statusline.py` | launcher / status line | not hooks |
 
@@ -56,7 +56,7 @@ Hook state (worker slots, edited files) lives per session under `REMI_STATE_DIR`
 
 ## Tests
 
-`tests/test_hooks.py` runs each hook as a **subprocess** (`run_hook(script, payload, *args)`) with a JSON payload built by `tool(name, cwd, **tool_input)`. Git behaviour uses the `repo` fixture (a temp repo on `main`). Pipeline tests isolate state with `REMI_STATE_DIR` (`pipeline_env`). Add a test there for any new guard or gate rule, covering both the blocked case and the allowed case.
+`tests/test_hooks.py` runs the dispatcher as a **subprocess** (`run_hook(event, payload)`) with a JSON payload built by `tool(name, cwd, **tool_input)`. Git behaviour uses the `repo` fixture (a temp repo on `main`). Pipeline tests isolate state with `REMI_STATE_DIR` (`pipeline_env`). Add a test there for any new guard or gate rule, covering both the blocked case and the allowed case.
 
 ## Conventions for changes here
 

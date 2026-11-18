@@ -1,7 +1,6 @@
-#!/usr/bin/env python3
 """Quality gate: format, lint and test, wired into several hook events.
 
-Modes (first CLI argument):
+Handlers, called by ``dispatch.py``:
 
 * ``edit``   - PostToolUse on Edit/Write: format + autofix the touched Python
                file and report leftover lint (incl. missing docstrings).
@@ -44,7 +43,7 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from _common import ALLOW, BLOCK, block, is_secret_path, project_dir, read_payload, state_dir  # noqa: E402
+from _common import ALLOW, BLOCK, block, is_secret_path, project_dir, repository_root, state_dir  # noqa: E402
 from agent_policy import _slot_name, request_check_due, slots_locked  # noqa: E402
 from agent_policy import on_stop as release_worker_slot  # noqa: E402
 from claude_md import count_lines, is_claude_md, max_lines  # noqa: E402
@@ -304,7 +303,7 @@ def on_edit(payload: dict[str, Any]) -> int:
     if path.suffix != ".py" or not path.is_file():
         return ALLOW
     record_edit(payload, path)
-    root = project_dir(payload)
+    root = repository_root(path.parent)
     problems = lint_files(root, [path], fix=True)
     if problems:
         print(
@@ -809,23 +808,3 @@ def on_review(payload: dict[str, Any]) -> int:
             f"the file (SendMessage), then start the review again.\n{failure}"
         )
     return ALLOW
-
-
-def main() -> int:
-    """Dispatch to the mode given on the command line.
-
-    Returns:
-        Process exit code.
-    """
-    mode = sys.argv[1] if len(sys.argv) > 1 else ""
-    try:
-        payload = read_payload()
-    except ValueError:
-        return BLOCK if mode == "commit" else ALLOW
-    handlers = {"edit": on_edit, "commit": on_commit, "worker": on_worker_stop, "review": on_review}
-    handler = handlers.get(mode)
-    return handler(payload) if handler else ALLOW
-
-
-if __name__ == "__main__":
-    sys.exit(main())

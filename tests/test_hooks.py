@@ -8,9 +8,17 @@ import pytest
 SCRIPTS = Path(__file__).resolve().parents[1] / "plugin" / "hooks" / "scripts"
 
 
-def run_hook(script: str, payload: dict, *args: str, cwd: Path | None = None, env: dict | None = None):
+def run_hook(event: str, payload: dict, cwd: Path | None = None, env: dict | None = None):
+    hook_names = {
+        "pre-tool": "PreToolUse",
+        "post-tool": "PostToolUse",
+        "subagent-start": "SubagentStart",
+        "subagent-stop": "SubagentStop",
+        "prompt": "UserPromptSubmit",
+    }
+    payload = {"hook_event_name": hook_names[event]} | payload
     return subprocess.run(
-        [sys.executable, str(SCRIPTS / script), *args],
+        [sys.executable, str(SCRIPTS / "dispatch.py"), event],
         input=json.dumps(payload),
         capture_output=True,
         text=True,
@@ -58,26 +66,26 @@ def tool(name: str, cwd: Path | None = None, **tool_input) -> dict:
     ],
 )
 def test_read_secret_blocked(path):
-    result = run_hook("guard.py", tool("Read", file_path=path))
+    result = run_hook("pre-tool", tool("Read", file_path=path))
     assert result.returncode == 2, path
     assert "BLOCKED" in result.stderr
 
 
 @pytest.mark.parametrize("path", [".env.example", "app/.env.sample", "src/settings.py", "envs/dev.py", "README.md"])
 def test_read_normal_allowed(path):
-    assert run_hook("guard.py", tool("Read", file_path=path)).returncode == 0
+    assert run_hook("pre-tool", tool("Read", file_path=path)).returncode == 0
 
 
 def test_write_env_blocked_but_example_allowed():
-    assert run_hook("guard.py", tool("Write", file_path=".env", content="X=1")).returncode == 2
-    assert run_hook("guard.py", tool("Edit", file_path=".env.example")).returncode == 0
+    assert run_hook("pre-tool", tool("Write", file_path=".env", content="X=1")).returncode == 2
+    assert run_hook("pre-tool", tool("Edit", file_path=".env.example")).returncode == 0
 
 
 def test_grep_glob_on_secrets_blocked():
-    assert run_hook("guard.py", tool("Grep", pattern="PASS", path=".env")).returncode == 2
-    assert run_hook("guard.py", tool("Grep", pattern="PASS", glob="**/.env*")).returncode == 2
-    assert run_hook("guard.py", tool("Glob", pattern="**/*.pem")).returncode == 2
-    assert run_hook("guard.py", tool("Grep", pattern="def ", path="src")).returncode == 0
+    assert run_hook("pre-tool", tool("Grep", pattern="PASS", path=".env")).returncode == 2
+    assert run_hook("pre-tool", tool("Grep", pattern="PASS", glob="**/.env*")).returncode == 2
+    assert run_hook("pre-tool", tool("Glob", pattern="**/*.pem")).returncode == 2
+    assert run_hook("pre-tool", tool("Grep", pattern="def ", path="src")).returncode == 0
 
 
 @pytest.mark.parametrize(
@@ -102,7 +110,7 @@ def test_grep_glob_on_secrets_blocked():
     ],
 )
 def test_bash_secret_access_blocked(command):
-    assert run_hook("guard.py", tool("Bash", command=command)).returncode == 2, command
+    assert run_hook("pre-tool", tool("Bash", command=command)).returncode == 2, command
 
 
 @pytest.mark.parametrize(
@@ -118,26 +126,63 @@ def test_bash_secret_access_blocked(command):
     ],
 )
 def test_bash_normal_allowed(command, repo):
-    assert run_hook("guard.py", tool("Bash", cwd=repo, command=command)).returncode == 0, command
+    assert run_hook("pre-tool", tool("Bash", cwd=repo, command=command)).returncode == 0, command
+
+
+def dispatch_raw(*arguments: str, stdin: str):
+    return subprocess.run(
+        [sys.executable, str(SCRIPTS / "dispatch.py"), *arguments], input=stdin, capture_output=True, text=True
+    )
 
 
 def test_malformed_payload_fails_closed():
-    result = subprocess.run(
-        [sys.executable, str(SCRIPTS / "guard.py")], input="not json", capture_output=True, text=True, check=False
-    )
+    assert dispatch_raw("pre-tool", stdin="not json").returncode == 2
+
+
+def test_malformed_payload_ignored_outside_pre_tool():
+    assert dispatch_raw("post-tool", stdin="not json").returncode == 0
+    assert dispatch_raw("prompt", stdin="[1]").returncode == 0
+
+
+def test_unknown_event_blocks():
+    result = dispatch_raw("pre-everything", stdin="{}")
     assert result.returncode == 2
+    assert "unknown hook event" in result.stderr
+
+
+def test_first_blocking_check_wins(repo):
+    # The guard blocks `printenv` before the commit and merge gates run.
+    result = run_hook("pre-tool", tool("Bash", repo, command="printenv && git commit -m 'feat: x'"))
+    assert result.returncode == 2
+    assert "printenv" in result.stderr
+
+
+def test_plain_calls_pass_every_check(repo):
+    for payload in (
+        tool("Read", repo, file_path=str(repo / "a.txt")),
+        tool("Bash", repo, command="ls"),
+        tool("Write", repo, file_path=str(repo / "notes.md"), content="hi\n"),
+    ):
+        assert run_hook("pre-tool", payload).returncode == 0, payload["tool_name"]
+
+
+def test_hooks_json_uses_only_the_dispatcher():
+    config = json.loads((SCRIPTS.parent / "hooks.json").read_text())
+    commands = [hook["command"] for groups in config["hooks"].values() for group in groups for hook in group["hooks"]]
+    assert commands
+    assert all('/hooks/scripts/dispatch.py" ' in command for command in commands)
 
 
 # --- git policy -------------------------------------------------------------
 
 
 def test_commit_on_main_blocked(repo):
-    assert run_hook("guard.py", tool("Bash", cwd=repo, command="git commit -m x")).returncode == 2
+    assert run_hook("pre-tool", tool("Bash", cwd=repo, command="git commit -m 'feat: x'")).returncode == 2
 
 
 def test_commit_after_branch_switch_allowed(repo):
     git(repo, "switch", "-qc", "feat/x")
-    result = run_hook("guard.py", tool("Bash", cwd=repo, command="git commit -m 'feat: add x'"))
+    result = run_hook("pre-tool", tool("Bash", cwd=repo, command="git commit -m 'feat: add x'"))
     assert result.returncode == 0, result.stderr
 
 
@@ -157,19 +202,19 @@ def test_commit_after_branch_switch_allowed(repo):
 )
 def test_dangerous_git_blocked(repo, command):
     git(repo, "switch", "-qc", "feat/x")
-    assert run_hook("guard.py", tool("Bash", cwd=repo, command=command)).returncode == 2, command
+    assert run_hook("pre-tool", tool("Bash", cwd=repo, command=command)).returncode == 2, command
 
 
 def test_push_feature_branch_allowed(repo):
     git(repo, "switch", "-qc", "feat/x")
     for command in ("git push -u origin HEAD", "git push --force-with-lease origin feat/x"):
-        assert run_hook("guard.py", tool("Bash", cwd=repo, command=command)).returncode == 0, command
+        assert run_hook("pre-tool", tool("Bash", cwd=repo, command=command)).returncode == 0, command
 
 
 def test_private_repo_create_allowed(repo):
     git(repo, "switch", "-qc", "feat/x")
     for command in ("gh repo create acme/x --private --source . --push", "gh repo create acme/x --internal"):
-        assert run_hook("guard.py", tool("Bash", cwd=repo, command=command)).returncode == 0, command
+        assert run_hook("pre-tool", tool("Bash", cwd=repo, command=command)).returncode == 0, command
 
 
 # --- commit gate --------------------------------------------------------------
@@ -177,7 +222,7 @@ def test_private_repo_create_allowed(repo):
 
 def test_commit_gate_requires_separate_staging(repo):
     git(repo, "switch", "-qc", "feat/x")
-    result = run_hook("quality.py", tool("Bash", cwd=repo, command="git add -A && git commit -m x"), "commit")
+    result = run_hook("pre-tool", tool("Bash", cwd=repo, command="git add -A && git commit -m 'feat: x'"))
     assert result.returncode == 2
 
 
@@ -195,16 +240,51 @@ def test_commit_gate_finds_secrets(repo, content):
     git(repo, "switch", "-qc", "feat/x")
     (repo / "leak.txt").write_text(content)
     git(repo, "add", "leak.txt")
-    result = run_hook("quality.py", tool("Bash", cwd=repo, command="git commit -m x"), "commit")
+    result = run_hook("pre-tool", tool("Bash", cwd=repo, command="git commit -m 'feat: x'"))
     assert result.returncode == 2, content
     assert "secrets" in result.stderr
+
+
+@pytest.mark.parametrize("subdirectory", ["", "src"])
+def test_commit_gate_checks_the_repository_it_runs_in(repo, tmp_path, subdirectory):
+    # remi launched in a parent folder: the gate must check the repository around the
+    # command's cwd, not CLAUDE_PROJECT_DIR (where it used to pass without checking anything).
+    git(repo, "switch", "-qc", "feat/x")
+    (repo / "src").mkdir()
+    (repo / "src" / "leak.txt").write_text("aws = 'AKIAABCDEFGHIJKLMNOP'\n")
+    git(repo, "add", "src/leak.txt")
+    payload = tool("Bash", cwd=repo / subdirectory, command="git commit -m 'feat: x'")
+    env = {"PATH": "/usr/bin:/bin", "HOME": str(tmp_path), "CLAUDE_PROJECT_DIR": str(tmp_path.parent)}
+    result = run_hook("pre-tool", payload, env=env)
+    assert result.returncode == 2
+    assert "AWS access key" in result.stderr
+
+
+def test_edit_hook_scopes_to_the_edited_files_repository(repo, tmp_path):
+    # The session runs in a parent folder. The edited file's own repository decides which
+    # lines are new (and where ruff and [tool.remi] come from), so the untouched legacy name
+    # `x` is not reported.
+    legacy = repo / "legacy.py"
+    legacy.write_text("x = 1\n")
+    git(repo, "add", "legacy.py")
+    git(repo, "commit", "-qm", "legacy")
+    legacy.write_text("x = 1\ntotal_amount = 2\n")
+    payload = tool("Edit", cwd=tmp_path.parent, file_path=str(legacy))
+    env = {"PATH": "/usr/bin:/bin", "HOME": str(tmp_path), "REMI_STATE_DIR": str(tmp_path / "state")}
+    result = run_hook("post-tool", payload, env=env | {"CLAUDE_PROJECT_DIR": str(tmp_path.parent)})
+    assert result.returncode == 0, result.stderr
+    legacy.write_text("x = 1\ny = 2\n")
+    result = run_hook("post-tool", payload, env=env | {"CLAUDE_PROJECT_DIR": str(tmp_path.parent)})
+    assert result.returncode == 2
+    assert "'y'" in result.stderr
+    assert "'x'" not in result.stderr
 
 
 def test_commit_gate_allow_marker_and_clean_commit(repo):
     git(repo, "switch", "-qc", "feat/x")
     (repo / "fixture.txt").write_text("card = '4111111111111111'  # remi: allow-secret\nplain text\n")
     git(repo, "add", "fixture.txt")
-    result = run_hook("quality.py", tool("Bash", cwd=repo, command="git commit -m x"), "commit")
+    result = run_hook("pre-tool", tool("Bash", cwd=repo, command="git commit -m 'feat: x'"))
     assert result.returncode == 0, result.stderr
 
 
@@ -212,7 +292,7 @@ def test_commit_gate_runs_project_override(repo):
     git(repo, "switch", "-qc", "feat/x")
     (repo / "pyproject.toml").write_text('[tool.remi]\ntest = "exit 3"\n')
     git(repo, "add", "pyproject.toml")
-    result = run_hook("quality.py", tool("Bash", cwd=repo, command="git commit -m x"), "commit")
+    result = run_hook("pre-tool", tool("Bash", cwd=repo, command="git commit -m 'feat: x'"))
     assert result.returncode == 2
     assert "test failed" in result.stderr
 
@@ -223,7 +303,7 @@ def test_commit_gate_runs_project_override(repo):
 def test_general_purpose_agent_redirected(tmp_path):
     payload = tool("Agent", subagent_type="general-purpose", prompt="x")
     payload["session_id"] = tmp_path.name
-    result = run_hook("agent_policy.py", payload, "pre")
+    result = run_hook("pre-tool", payload)
     assert result.returncode == 2
     assert "remi:worker" in result.stderr
 
@@ -237,16 +317,13 @@ def test_worker_cap(tmp_path):
     pre = tool("Agent", subagent_type="remi:worker", prompt="x")
     pre["session_id"] = session
     env = {"TMPDIR": str(tmp_path), "REMI_MAX_WORKERS": "2", "PATH": "/usr/bin:/bin"}
-    assert run_hook("agent_policy.py", pre, "pre", env=env).returncode == 0
-    assert (
-        run_hook("agent_policy.py", worker_event(session, "agent-one", "SubagentStart"), "start", env=env).returncode
-        == 0
-    )
-    assert run_hook("agent_policy.py", pre, "pre", env=env).returncode == 0  # pending, not started yet
-    assert run_hook("agent_policy.py", pre, "pre", env=env).returncode == 2  # 1 active + 1 pending = limit
-    run_hook("agent_policy.py", worker_event(session, "agent-two", "SubagentStart"), "start", env=env)
-    run_hook("agent_policy.py", worker_event(session, "agent-one", "SubagentStop"), "stop", env=env)
-    assert run_hook("agent_policy.py", pre, "pre", env=env).returncode == 0
+    assert run_hook("pre-tool", pre, env=env).returncode == 0
+    assert run_hook("subagent-start", worker_event(session, "agent-one", "SubagentStart"), env=env).returncode == 0
+    assert run_hook("pre-tool", pre, env=env).returncode == 0  # pending, not started yet
+    assert run_hook("pre-tool", pre, env=env).returncode == 2  # 1 active + 1 pending = limit
+    run_hook("subagent-start", worker_event(session, "agent-two", "SubagentStart"), env=env)
+    run_hook("subagent-stop", worker_event(session, "agent-one", "SubagentStop"), env=env)
+    assert run_hook("pre-tool", pre, env=env).returncode == 0
 
 
 def test_resumed_worker_does_not_free_other_slots(tmp_path):
@@ -255,21 +332,21 @@ def test_resumed_worker_does_not_free_other_slots(tmp_path):
     pre["session_id"] = session
     env = {"TMPDIR": str(tmp_path), "REMI_MAX_WORKERS": "2", "PATH": "/usr/bin:/bin"}
     for agent_id in ("agent-one", "agent-two"):
-        run_hook("agent_policy.py", pre, "pre", env=env)
-        run_hook("agent_policy.py", worker_event(session, agent_id, "SubagentStart"), "start", env=env)
+        run_hook("pre-tool", pre, env=env)
+        run_hook("subagent-start", worker_event(session, agent_id, "SubagentStart"), env=env)
     # agent-one finishes, then is resumed with SendMessage for review fixes (no PreToolUse)
-    run_hook("agent_policy.py", worker_event(session, "agent-one", "SubagentStop"), "stop", env=env)
-    run_hook("agent_policy.py", worker_event(session, "agent-one", "SubagentStart"), "start", env=env)
-    assert run_hook("agent_policy.py", pre, "pre", env=env).returncode == 2  # still 2 running
-    run_hook("agent_policy.py", worker_event(session, "agent-one", "SubagentStop"), "stop", env=env)
-    assert run_hook("agent_policy.py", pre, "pre", env=env).returncode == 0
+    run_hook("subagent-stop", worker_event(session, "agent-one", "SubagentStop"), env=env)
+    run_hook("subagent-start", worker_event(session, "agent-one", "SubagentStart"), env=env)
+    assert run_hook("pre-tool", pre, env=env).returncode == 2  # still 2 running
+    run_hook("subagent-stop", worker_event(session, "agent-one", "SubagentStop"), env=env)
+    assert run_hook("pre-tool", pre, env=env).returncode == 0
 
 
-def test_explore_and_reviewer_allowed(tmp_path):
+def test_explore_and_reviewer_allowed(tmp_path, repo):
     for agent in ("remi:explorer", "remi:reviewer"):
-        payload = tool("Agent", subagent_type=agent, prompt="x")
+        payload = tool("Agent", repo, subagent_type=agent, prompt="x")
         payload["session_id"] = tmp_path.name
-        assert run_hook("agent_policy.py", payload, "pre").returncode == 0
+        assert run_hook("pre-tool", payload).returncode == 0
 
 
 # --- reviewer: blind code review, then the verbatim request ---------------------------
@@ -286,27 +363,27 @@ def review_env(tmp_path: Path) -> dict:
 def reviewer_launch(prompt: str, session: str, env: dict):
     payload = tool("Agent", subagent_type="remi:reviewer", prompt=prompt)
     payload["session_id"] = session
-    return run_hook("agent_policy.py", payload, "pre", env=env)
+    return run_hook("pre-tool", payload, env=env)
 
 
 def record_prompt(message: str, session: str, env: dict) -> None:
     payload = {"session_id": session, "hook_event_name": "UserPromptSubmit", "prompt": message}
-    assert run_hook("agent_policy.py", payload, "prompt", env=env).returncode == 0
+    assert run_hook("prompt", payload, env=env).returncode == 0
 
 
 def start_reviewer(session: str, agent_id: str, env: dict) -> None:
     payload = {"session_id": session, "agent_type": "remi:reviewer", "agent_id": agent_id}
-    assert run_hook("agent_policy.py", payload, "start", env=env).returncode == 0
+    assert run_hook("subagent-start", payload, env=env).returncode == 0
 
 
 def send_message(to: str, message: str, session: str, env: dict):
     payload = tool("SendMessage", to=to, message=message)
     payload["session_id"] = session
-    return run_hook("agent_policy.py", payload, "message", env=env)
+    return run_hook("pre-tool", payload, env=env)
 
 
 def commit_payload(repo: Path, session: str) -> dict:
-    payload = tool("Bash", cwd=repo, command="git commit -m x")
+    payload = tool("Bash", cwd=repo, command="git commit -m 'feat: x'")
     payload["session_id"] = session
     return payload
 
@@ -383,15 +460,15 @@ def test_commit_refused_until_request_check_sent(repo, tmp_path):
     git(repo, "add", "notes.txt")
     record_prompt(REQUEST, "gate", env)
     start_reviewer("gate", "reviewer-one", env)
-    result = run_hook("quality.py", commit_payload(repo, "gate"), "commit", env=env)
+    result = run_hook("pre-tool", commit_payload(repo, "gate"), env=env)
     assert result.returncode == 2
     assert "reviewer-one" in result.stderr
     start_reviewer("gate", "reviewer-one", env)  # resumed by SendMessage: not a new review
     assert send_message("reviewer-one", f"{CHECK_LINE}\n<request>{REQUEST}</request>", "gate", env).returncode == 0
-    result = run_hook("quality.py", commit_payload(repo, "gate"), "commit", env=env)
+    result = run_hook("pre-tool", commit_payload(repo, "gate"), env=env)
     assert result.returncode == 0, result.stderr
     start_reviewer("gate", "reviewer-two", env)  # second review: due again
-    assert run_hook("quality.py", commit_payload(repo, "gate"), "commit", env=env).returncode == 2
+    assert run_hook("pre-tool", commit_payload(repo, "gate"), env=env).returncode == 2
 
 
 def test_commit_allowed_without_review_or_user_messages(repo, tmp_path):
@@ -400,7 +477,7 @@ def test_commit_allowed_without_review_or_user_messages(repo, tmp_path):
     (repo / "notes.txt").write_text("plain text\n")
     git(repo, "add", "notes.txt")
     start_reviewer("silent", "reviewer-one", env)  # no recorded user message: nothing to check against
-    result = run_hook("quality.py", commit_payload(repo, "silent"), "commit", env=env)
+    result = run_hook("pre-tool", commit_payload(repo, "silent"), env=env)
     assert result.returncode == 0, result.stderr
 
 
@@ -416,7 +493,7 @@ def test_commit_allowed_without_review_or_user_messages(repo, tmp_path):
 )
 def test_claude_attribution_blocked(repo, command):
     git(repo, "switch", "-qc", "feat/x")
-    result = run_hook("guard.py", tool("Bash", cwd=repo, command=command))
+    result = run_hook("pre-tool", tool("Bash", cwd=repo, command=command))
     assert result.returncode == 2
     assert "attribution" in result.stderr
 
@@ -424,7 +501,7 @@ def test_claude_attribution_blocked(repo, command):
 def test_plain_pr_allowed(repo):
     git(repo, "switch", "-qc", "feat/x")
     command = 'gh pr create --title "feat: add fx rates" --body "## What\n- rates"'
-    assert run_hook("guard.py", tool("Bash", cwd=repo, command=command)).returncode == 0
+    assert run_hook("pre-tool", tool("Bash", cwd=repo, command=command)).returncode == 0
 
 
 # --- naming -----------------------------------------------------------------------
@@ -484,7 +561,7 @@ def test_edit_hook_reports_single_letters(tmp_path):
     source_file = tmp_path / "service.py"
     source_file.write_text('def compute(x: int) -> int:\n    """Double it."""\n    return x * 2\n')
     payload = tool("Edit", cwd=tmp_path, file_path=str(source_file))
-    result = run_hook("quality.py", payload, "edit", cwd=tmp_path)
+    result = run_hook("post-tool", payload, cwd=tmp_path)
     assert result.returncode == 2
     assert "'x'" in result.stderr
 
@@ -493,7 +570,7 @@ def test_commit_gate_blocks_single_letters(repo):
     git(repo, "switch", "-qc", "feat/x")
     (repo / "module.py").write_text("for i in range(3):\n    print(i)\n")
     git(repo, "add", "module.py")
-    result = run_hook("quality.py", tool("Bash", cwd=repo, command="git commit -m x"), "commit")
+    result = run_hook("pre-tool", tool("Bash", cwd=repo, command="git commit -m 'feat: x'"))
     assert result.returncode == 2
     assert "single-letter variable 'i'" in result.stderr
 
@@ -502,7 +579,7 @@ def test_project_defined_agents_blocked(tmp_path):
     for agent in ("layering-reviewer", "migration-reviewer", "agent-prompt-reviewer"):
         payload = tool("Agent", subagent_type=agent, prompt="x")
         payload["session_id"] = tmp_path.name
-        result = run_hook("agent_policy.py", payload, "pre")
+        result = run_hook("pre-tool", payload)
         assert result.returncode == 2, agent
         assert "not part of remi" in result.stderr
 
@@ -517,8 +594,8 @@ def pipeline_env(tmp_path: Path) -> dict:
 def start_worker(session: str, agent_id: str, env: dict) -> None:
     pre = tool("Agent", subagent_type="remi:worker", prompt="x")
     pre["session_id"] = session
-    run_hook("agent_policy.py", pre, "pre", env=env)
-    run_hook("agent_policy.py", worker_event(session, agent_id, "SubagentStart"), "start", env=env)
+    run_hook("pre-tool", pre, env=env)
+    run_hook("subagent-start", worker_event(session, agent_id, "SubagentStart"), env=env)
 
 
 def worker_stop(repo: Path, session: str, agent_id: str) -> dict:
@@ -534,7 +611,7 @@ def test_worker_gate_defers_tests_while_others_run(repo, tmp_path):
     (repo / "tests").mkdir()
     start_worker("deferred", "agent-one", env)
     start_worker("deferred", "agent-two", env)
-    result = run_hook("quality.py", worker_stop(repo, "deferred", "agent-one"), "worker", env=env)
+    result = run_hook("subagent-stop", worker_stop(repo, "deferred", "agent-one"), env=env)
     assert result.returncode == 0, result.stderr  # agent-two still running: tests wait for the review gate
 
 
@@ -544,7 +621,7 @@ def test_last_worker_runs_tests(repo, tmp_path):
     (repo / "pyproject.toml").write_text('[tool.remi]\ntest = "exit 3"\n')
     (repo / "tests").mkdir()
     start_worker("last", "agent-one", env)
-    result = run_hook("quality.py", worker_stop(repo, "last", "agent-one"), "worker", env=env)
+    result = run_hook("subagent-stop", worker_stop(repo, "last", "agent-one"), env=env)
     assert result.returncode == 2
     assert "Tests are red" in result.stderr
 
@@ -555,7 +632,7 @@ def test_review_refused_while_workers_run(repo, tmp_path):
     start_worker("busy", "agent-one", env)
     payload = tool("Agent", cwd=repo, subagent_type="remi:reviewer", prompt="Review main...feat/x")
     payload["session_id"] = "busy"
-    result = run_hook("quality.py", payload, "review", env=env)
+    result = run_hook("pre-tool", payload, env=env)
     assert result.returncode == 2
     assert "still running" in result.stderr
 
@@ -567,7 +644,7 @@ def test_review_runs_fix_then_gate(repo, tmp_path):
     (repo / "tests").mkdir()
     payload = tool("Agent", cwd=repo, subagent_type="remi:reviewer", prompt="Review main...feat/x")
     payload["session_id"] = "green"
-    result = run_hook("quality.py", payload, "review", env=env)
+    result = run_hook("pre-tool", payload, env=env)
     assert result.returncode == 0, result.stderr
     assert (repo / "fixed.marker").exists()
 
@@ -579,7 +656,7 @@ def test_review_refused_when_tests_red(repo, tmp_path):
     (repo / "tests").mkdir()
     payload = tool("Agent", cwd=repo, subagent_type="remi:reviewer", prompt="Review main...feat/x")
     payload["session_id"] = "red"
-    result = run_hook("quality.py", payload, "review", env=env)
+    result = run_hook("pre-tool", payload, env=env)
     assert result.returncode == 2
     assert "review is refused" in result.stderr
 
@@ -590,8 +667,8 @@ def test_default_worker_cap_is_three(tmp_path):
     pre["session_id"] = session
     env = {"TMPDIR": str(tmp_path), "PATH": "/usr/bin:/bin"}
     for _ in range(3):
-        assert run_hook("agent_policy.py", pre, "pre", env=env).returncode == 0
-    result = run_hook("agent_policy.py", pre, "pre", env=env)
+        assert run_hook("pre-tool", pre, env=env).returncode == 0
+    result = run_hook("pre-tool", pre, env=env)
     assert result.returncode == 2
     assert "limit 3" in result.stderr
 
@@ -614,7 +691,7 @@ def test_default_worker_cap_is_three(tmp_path):
 )
 def test_conventional_commit_allowed(repo, command):
     git(repo, "switch", "-qc", "feat/x")
-    result = run_hook("guard.py", tool("Bash", cwd=repo, command=command))
+    result = run_hook("pre-tool", tool("Bash", cwd=repo, command=command))
     assert result.returncode == 0, result.stderr
 
 
@@ -635,7 +712,7 @@ def test_conventional_commit_allowed(repo, command):
 )
 def test_non_conventional_commit_blocked(repo, command, reason):
     git(repo, "switch", "-qc", "feat/x")
-    result = run_hook("guard.py", tool("Bash", cwd=repo, command=command))
+    result = run_hook("pre-tool", tool("Bash", cwd=repo, command=command))
     assert result.returncode == 2, command
     assert reason in result.stderr, result.stderr
 
@@ -647,13 +724,13 @@ def test_non_conventional_commit_blocked(repo, command, reason):
 def test_plain_pr_title_allowed(repo, title):
     git(repo, "switch", "-qc", "feat/x")
     command = f"gh pr create --base main --title '{title}' --body-file /tmp/body.md"
-    assert run_hook("guard.py", tool("Bash", cwd=repo, command=command)).returncode == 0
+    assert run_hook("pre-tool", tool("Bash", cwd=repo, command=command)).returncode == 0
 
 
 def test_plan_subagent_redirected_to_orchestrator(tmp_path):
     payload = tool("Agent", subagent_type="Plan", prompt="design it")
     payload["session_id"] = tmp_path.name
-    result = run_hook("agent_policy.py", payload, "pre", env={"REMI_STATE_DIR": str(tmp_path), "PATH": "/usr/bin:/bin"})
+    result = run_hook("pre-tool", payload, env={"REMI_STATE_DIR": str(tmp_path), "PATH": "/usr/bin:/bin"})
     assert result.returncode == 2
     assert "designs the plan itself" in result.stderr
     assert "ExitPlanMode" in result.stderr
@@ -670,41 +747,39 @@ def lines_of(count: int) -> str:
     "path", ["CLAUDE.md", "/repo/CLAUDE.md", "/repo/.claude/CLAUDE.md", "/repo/api/CLAUDE.local.md"]
 )
 def test_claude_md_write_over_limit_blocked(path):
-    result = run_hook("claude_md.py", tool("Write", file_path=path, content=lines_of(201)))
+    result = run_hook("pre-tool", tool("Write", file_path=path, content=lines_of(201)))
     assert result.returncode == 2
     assert "201 lines; the limit is 200" in result.stderr
 
 
 def test_claude_md_write_at_limit_allowed():
-    assert run_hook("claude_md.py", tool("Write", file_path="CLAUDE.md", content=lines_of(200))).returncode == 0
+    assert run_hook("pre-tool", tool("Write", file_path="CLAUDE.md", content=lines_of(200))).returncode == 0
 
 
 def test_other_markdown_not_limited():
-    assert run_hook("claude_md.py", tool("Write", file_path="README.md", content=lines_of(500))).returncode == 0
-    assert (
-        run_hook("claude_md.py", tool("Write", file_path="docs/CLAUDE.md.bak", content=lines_of(500))).returncode == 0
-    )
+    assert run_hook("pre-tool", tool("Write", file_path="README.md", content=lines_of(500))).returncode == 0
+    assert run_hook("pre-tool", tool("Write", file_path="docs/CLAUDE.md.bak", content=lines_of(500))).returncode == 0
 
 
 def test_claude_md_edit_computes_result(tmp_path):
     claude_md = tmp_path / "CLAUDE.md"
     claude_md.write_text(lines_of(199))
     growing = tool("Edit", file_path=str(claude_md), old_string="- rule 0\n", new_string="- rule 0\n- a\n- b\n")
-    assert run_hook("claude_md.py", growing).returncode == 2
+    assert run_hook("pre-tool", growing).returncode == 2
     shrinking = tool("Edit", file_path=str(claude_md), old_string="- rule 0\n- rule 1\n", new_string="- rules 0-1\n")
-    assert run_hook("claude_md.py", shrinking).returncode == 0
+    assert run_hook("pre-tool", shrinking).returncode == 0
 
 
 def test_claude_md_multiedit(tmp_path):
     claude_md = tmp_path / "CLAUDE.md"
     claude_md.write_text(lines_of(200))
     edits = [{"old_string": "- rule 1\n", "new_string": "- rule 1\n- extra\n"}]
-    assert run_hook("claude_md.py", tool("MultiEdit", file_path=str(claude_md), edits=edits)).returncode == 2
+    assert run_hook("pre-tool", tool("MultiEdit", file_path=str(claude_md), edits=edits)).returncode == 2
 
 
 def test_claude_md_limit_configurable():
     env = {"REMI_CLAUDE_MD_MAX_LINES": "50", "PATH": "/usr/bin:/bin"}
-    result = run_hook("claude_md.py", tool("Write", file_path="CLAUDE.md", content=lines_of(51)), env=env)
+    result = run_hook("pre-tool", tool("Write", file_path="CLAUDE.md", content=lines_of(51)), env=env)
     assert result.returncode == 2
 
 
@@ -719,7 +794,7 @@ def test_claude_md_limit_configurable():
     ],
 )
 def test_claude_md_shell_writes_blocked(command):
-    assert run_hook("claude_md.py", tool("Bash", command=command)).returncode == 2
+    assert run_hook("pre-tool", tool("Bash", command=command)).returncode == 2
 
 
 @pytest.mark.parametrize(
@@ -733,14 +808,14 @@ def test_claude_md_shell_writes_blocked(command):
     ],
 )
 def test_claude_md_shell_reads_allowed(command):
-    assert run_hook("claude_md.py", tool("Bash", command=command)).returncode == 0
+    assert run_hook("pre-tool", tool("Bash", command=command)).returncode == 0
 
 
 def test_commit_gate_blocks_long_claude_md(repo):
     git(repo, "switch", "-qc", "feat/x")
     (repo / "CLAUDE.md").write_text(lines_of(250))
     git(repo, "add", "CLAUDE.md")
-    result = run_hook("quality.py", tool("Bash", cwd=repo, command="git commit -m 'docs: add claude.md'"), "commit")
+    result = run_hook("pre-tool", tool("Bash", cwd=repo, command="git commit -m 'docs: add claude.md'"))
     assert result.returncode == 2
     assert "CLAUDE.md has 250 lines (limit 200)" in result.stderr
 
@@ -748,7 +823,7 @@ def test_commit_gate_blocks_long_claude_md(repo):
 def test_builtin_explore_redirected_to_cheap_explorer(tmp_path):
     payload = tool("Agent", subagent_type="Explore", prompt="find the settings module")
     payload["session_id"] = tmp_path.name
-    result = run_hook("agent_policy.py", payload, "pre", env={"REMI_STATE_DIR": str(tmp_path), "PATH": "/usr/bin:/bin"})
+    result = run_hook("pre-tool", payload, env={"REMI_STATE_DIR": str(tmp_path), "PATH": "/usr/bin:/bin"})
     assert result.returncode == 2
     assert "remi:explorer" in result.stderr
     assert "Grep and Read yourself" in result.stderr
@@ -760,9 +835,9 @@ def test_explorer_does_not_take_a_worker_slot(tmp_path):
     worker = tool("Agent", subagent_type="remi:worker", prompt="x")
     for payload in (explorer, worker):
         payload["session_id"] = "slots"
-    assert run_hook("agent_policy.py", explorer, "pre", env=env).returncode == 0
-    assert run_hook("agent_policy.py", explorer, "pre", env=env).returncode == 0
-    assert run_hook("agent_policy.py", worker, "pre", env=env).returncode == 0
+    assert run_hook("pre-tool", explorer, env=env).returncode == 0
+    assert run_hook("pre-tool", explorer, env=env).returncode == 0
+    assert run_hook("pre-tool", worker, env=env).returncode == 0
 
 
 # --- legacy-safe checks ------------------------------------------------------------
@@ -806,7 +881,7 @@ def test_change_scope_ranges():
 def test_edit_in_legacy_file_ignores_untouched_legacy_code(legacy_repo):
     legacy_file = legacy_repo / "legacy.py"
     legacy_file.write_text(LEGACY_SOURCE + GOOD_ADDITION)
-    result = run_hook("quality.py", edit_payload(legacy_repo, "legacy.py"), "edit", cwd=legacy_repo)
+    result = run_hook("post-tool", edit_payload(legacy_repo, "legacy.py"), cwd=legacy_repo)
     assert result.returncode == 0, result.stderr
     content = legacy_file.read_text()
     assert "def f(x):" in content and "{  'a':1 }" in content  # legacy lines untouched, not reformatted
@@ -818,7 +893,7 @@ def test_edit_in_legacy_file_flags_only_new_violations(legacy_repo):
     legacy_file.write_text(
         LEGACY_SOURCE + '\n\ndef add_fee(a: int) -> int:\n    """Add the fee."""\n    return a + 1\n'
     )
-    result = run_hook("quality.py", edit_payload(legacy_repo, "legacy.py"), "edit", cwd=legacy_repo)
+    result = run_hook("post-tool", edit_payload(legacy_repo, "legacy.py"), cwd=legacy_repo)
     assert result.returncode == 2
     assert "'a'" in result.stderr
     assert "'x'" not in result.stderr and "'i'" not in result.stderr  # pre-existing names aren't reported
@@ -827,7 +902,7 @@ def test_edit_in_legacy_file_flags_only_new_violations(legacy_repo):
 def test_edit_in_legacy_file_formats_only_changed_range(legacy_repo):
     legacy_file = legacy_repo / "legacy.py"
     legacy_file.write_text(LEGACY_SOURCE + "\nFEES = {  'card':2 }\n")
-    result = run_hook("quality.py", edit_payload(legacy_repo, "legacy.py"), "edit", cwd=legacy_repo)
+    result = run_hook("post-tool", edit_payload(legacy_repo, "legacy.py"), cwd=legacy_repo)
     assert result.returncode == 0, result.stderr
     content = legacy_file.read_text()
     assert 'FEES = {"card": 2}' in content  # the changed line is formatted
@@ -836,7 +911,7 @@ def test_edit_in_legacy_file_formats_only_changed_range(legacy_repo):
 
 def test_new_file_is_checked_in_full(legacy_repo):
     (legacy_repo / "fresh.py").write_text("def compute(x):\n    return x\n")
-    result = run_hook("quality.py", edit_payload(legacy_repo, "fresh.py"), "edit", cwd=legacy_repo)
+    result = run_hook("post-tool", edit_payload(legacy_repo, "fresh.py"), cwd=legacy_repo)
     assert result.returncode == 2
     assert "D103" in result.stderr and "'x'" in result.stderr
 
@@ -844,14 +919,14 @@ def test_new_file_is_checked_in_full(legacy_repo):
 def test_commit_gate_passes_clean_change_in_legacy_file(legacy_repo):
     (legacy_repo / "legacy.py").write_text(LEGACY_SOURCE + GOOD_ADDITION)
     git(legacy_repo, "add", "legacy.py")
-    result = run_hook("quality.py", tool("Bash", cwd=legacy_repo, command="git commit -m 'feat: add x'"), "commit")
+    result = run_hook("pre-tool", tool("Bash", cwd=legacy_repo, command="git commit -m 'feat: add x'"))
     assert result.returncode == 0, result.stderr
 
 
 def test_commit_gate_refuses_unformatted_change_in_legacy_file(legacy_repo):
     (legacy_repo / "legacy.py").write_text(LEGACY_SOURCE + "\nFEES = {  'card':2 }\n")
     git(legacy_repo, "add", "legacy.py")
-    result = run_hook("quality.py", tool("Bash", cwd=legacy_repo, command="git commit -m 'feat: add x'"), "commit")
+    result = run_hook("pre-tool", tool("Bash", cwd=legacy_repo, command="git commit -m 'feat: add x'"))
     assert result.returncode == 2
     assert "format failed" in result.stderr and "legacy.py" in result.stderr
 
@@ -952,7 +1027,7 @@ def test_onboard_outside_git(tmp_path):
     ],
 )
 def test_chained_credential_commands_blocked(repo, command):
-    result = run_hook("guard.py", tool("Bash", cwd=repo, command=command))
+    result = run_hook("pre-tool", tool("Bash", cwd=repo, command=command))
     assert result.returncode == 2
     assert "on its own" in result.stderr
 
@@ -969,7 +1044,7 @@ def test_chained_credential_commands_blocked(repo, command):
 )
 def test_standalone_credential_commands_allowed(repo, command):
     git(repo, "switch", "-qc", "feat/x")
-    result = run_hook("guard.py", tool("Bash", cwd=repo, command=command))
+    result = run_hook("pre-tool", tool("Bash", cwd=repo, command=command))
     assert result.returncode == 0, result.stderr
 
 
@@ -983,7 +1058,7 @@ def new_repo(tmp_path: Path) -> Path:
 
 def test_bootstrap_commit_on_new_repo_allowed(new_repo):
     command = 'git commit --allow-empty -m "chore: initial commit"'
-    result = run_hook("guard.py", tool("Bash", cwd=new_repo, command=command))
+    result = run_hook("pre-tool", tool("Bash", cwd=new_repo, command=command))
     assert result.returncode == 0, result.stderr
 
 
@@ -991,23 +1066,23 @@ def test_bootstrap_commit_with_staged_files_blocked(new_repo):
     (new_repo / "app.py").write_text("print('hi')\n")
     git(new_repo, "add", "app.py")
     command = 'git commit --allow-empty -m "chore: initial commit"'
-    assert run_hook("guard.py", tool("Bash", cwd=new_repo, command=command)).returncode == 2
+    assert run_hook("pre-tool", tool("Bash", cwd=new_repo, command=command)).returncode == 2
 
 
 def test_second_empty_commit_on_main_blocked(new_repo):
     git(new_repo, "commit", "-q", "--allow-empty", "-m", "chore: initial commit")
     command = 'git commit --allow-empty -m "chore: another"'
-    assert run_hook("guard.py", tool("Bash", cwd=new_repo, command=command)).returncode == 2
+    assert run_hook("pre-tool", tool("Bash", cwd=new_repo, command=command)).returncode == 2
 
 
 def test_repo_create_push_only_with_bootstrap_main(new_repo):
     command = "gh repo create svc --private --source . --remote origin --push"
     git(new_repo, "commit", "-q", "--allow-empty", "-m", "chore: initial commit")
-    assert run_hook("guard.py", tool("Bash", cwd=new_repo, command=command)).returncode == 0
+    assert run_hook("pre-tool", tool("Bash", cwd=new_repo, command=command)).returncode == 0
     (new_repo / "app.py").write_text("print('hi')\n")
     git(new_repo, "add", "app.py")
     git(new_repo, "commit", "-qm", "feat: app")
-    result = run_hook("guard.py", tool("Bash", cwd=new_repo, command=command))
+    result = run_hook("pre-tool", tool("Bash", cwd=new_repo, command=command))
     assert result.returncode == 2
     assert "bootstrap" in result.stderr
 
@@ -1069,7 +1144,7 @@ def reviewer_stops(repo: Path, session: str, agent_id: str, message: str, env: d
         "cwd": str(repo),
         "last_assistant_message": message,
     }
-    assert run_hook("quality.py", payload, "worker", env=env).returncode == 0
+    assert run_hook("subagent-stop", payload, env=env).returncode == 0
 
 
 def reviewed_change(repo: Path, tmp_path: Path, verdict: str = "APPROVE", request: str = "MATCHES") -> dict:
@@ -1089,7 +1164,7 @@ def merge(repo: Path, env: dict, extra: str = "", pin: bool = True):
     command = "gh pr merge --merge --delete-branch" + (f" --match-head-commit {head}" if pin else "") + extra
     payload = tool("Bash", cwd=repo, command=command)
     payload["session_id"] = "merge"
-    return run_hook("merge_gate.py", payload, env=env)
+    return run_hook("pre-tool", payload, env=env)
 
 
 def test_merge_after_approve_and_matches_allowed(repo, tmp_path):
@@ -1164,7 +1239,7 @@ def test_verdict_read_from_transcript_when_message_missing(repo, tmp_path):
         transcript.write_text(json.dumps(entry) + "\n")
         payload = {"session_id": "merge", "agent_type": "remi:reviewer", "agent_id": "reviewer-one", "cwd": str(repo)}
         payload["agent_transcript_path"] = str(transcript)
-        assert run_hook("quality.py", payload, "worker", env=env).returncode == 0
+        assert run_hook("subagent-stop", payload, env=env).returncode == 0
     git(repo, "add", "service.py")
     git(repo, "commit", "-qm", "feat: add service")
     result = merge(repo, env)
@@ -1173,7 +1248,7 @@ def test_verdict_read_from_transcript_when_message_missing(repo, tmp_path):
 
 def test_other_commands_pass_merge_gate(repo, tmp_path):
     payload = tool("Bash", cwd=repo, command="gh pr view --json state")
-    assert run_hook("merge_gate.py", payload, env=review_env(tmp_path)).returncode == 0
+    assert run_hook("pre-tool", payload, env=review_env(tmp_path)).returncode == 0
 
 
 def test_merge_gate_uses_repo_of_current_directory(repo, tmp_path):
