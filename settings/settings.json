@@ -10,6 +10,9 @@
     "command": "python3 \"$REMI_HOME/plugin/hooks/scripts/statusline.py\"",
     "padding": 0
   },
+  "enabledPlugins": {
+    "pyright-lsp@claude-plugins-official": true
+  },
   "permissions": {
     "disableBypassPermissionsMode": "disable",
     "allow": [
