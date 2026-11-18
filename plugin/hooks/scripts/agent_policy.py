@@ -7,6 +7,12 @@
 * ``start`` - SubagentStart: turn a pending reservation into an active slot
                keyed by the worker's ``agent_id``.
 * ``stop``  - SubagentStop: free that worker's slot.
+* ``prompt`` - UserPromptSubmit: record the user's message, so the reviewer's
+               quote of the original request can be checked as verbatim.
+
+The reviewer gets no context: its prompt is one base-branch line plus, once the
+user has sent a message this session, the user's request quoted verbatim in
+``<request>`` blocks. Anything else (a plan, an explanation) is refused.
 
 Running workers = pending reservations + active slots. Active slots are keyed by
 agent id, so a worker that is resumed with SendMessage (for example for review
@@ -19,6 +25,7 @@ reclaimed.
 from __future__ import annotations
 
 import fcntl
+import json
 import os
 import re
 import sys
@@ -40,6 +47,11 @@ REDIRECT = {
 }
 ALLOWED_AGENT_TYPES = frozenset({"remi:worker", "remi:reviewer", "remi:explorer"})
 """Only the wrapper's own agents (the explorer runs on Haiku; the built-in Explore inherits the expensive session model) may run; project-defined agents are refused."""
+
+REQUEST_BLOCK = re.compile(r"<request>(.*?)</request>", re.DOTALL)
+REQUESTS_FILE = "user-requests.json"
+MAX_RECORDED_REQUESTS = 50
+MAX_REVIEWER_LINE_CHARS = 200
 
 
 def max_workers() -> int:
@@ -118,6 +130,91 @@ def _slot_name(payload: dict[str, Any]) -> str:
     return re.sub(r"[^\w-]", "_", agent_id)
 
 
+def _normalise(text: str) -> str:
+    """Collapse all whitespace so quoting survives re-wrapping.
+
+    Args:
+        text: Text to normalise.
+
+    Returns:
+        The text with each whitespace run replaced by one space, stripped.
+    """
+    return " ".join(text.split())
+
+
+def _recorded_requests(payload: dict[str, Any]) -> list[str]:
+    """Load the user messages recorded for this session.
+
+    Args:
+        payload: Hook payload (scopes state to the session).
+
+    Returns:
+        The recorded messages, oldest first; empty when none or unreadable.
+    """
+    try:
+        recorded = json.loads((state_dir(payload) / REQUESTS_FILE).read_text())
+    except (OSError, ValueError):
+        return []
+    return [str(message) for message in recorded] if isinstance(recorded, list) else []
+
+
+def _check_reviewer_prompt(payload: dict[str, Any]) -> None:
+    """Refuse a reviewer launch that carries context or a paraphrased request.
+
+    Args:
+        payload: PreToolUse payload for the Agent tool.
+    """
+    prompt = str((payload.get("tool_input") or {}).get("prompt") or "")
+    quotes = [_normalise(quote) for quote in REQUEST_BLOCK.findall(prompt)]
+    outside = [line.strip() for line in REQUEST_BLOCK.sub("", prompt).splitlines() if line.strip()]
+    if len(outside) > 1 or any(len(line) > MAX_REVIEWER_LINE_CHARS for line in outside):
+        block(
+            "the reviewer gets no context. Its prompt is one line naming the base branch "
+            '("Review the changes against `main`."), plus the user\'s request quoted verbatim in '
+            "<request>...</request>. Don't add the plan, what was done or why."
+        )
+    recorded = [_normalise(message) for message in _recorded_requests(payload)]
+    if not recorded:
+        if quotes:
+            block(
+                "no user message is recorded for this session, so the <request> quote can't be verified. "
+                "Launch the reviewer with only the base-branch line."
+            )
+        return
+    if not quotes or not all(quotes):
+        block(
+            "quote the user's original request verbatim in <request>...</request> after the base-branch line "
+            "(and, in another <request> block, any later message that changed what was asked), so the reviewer "
+            "can check the change does what was asked. No plan or explanation."
+        )
+    for quote in quotes:
+        if not any(quote in message for message in recorded):
+            block(
+                "a <request> block is not a verbatim quote of a user message. Copy the user's words exactly; "
+                f"don't summarise or reword them. Not found: {quote[:120]!r}"
+            )
+
+
+def on_prompt(payload: dict[str, Any]) -> int:
+    """Record the user's message for the reviewer's request check.
+
+    Args:
+        payload: UserPromptSubmit payload.
+
+    Returns:
+        Always 0: recording never blocks the user.
+    """
+    message = str(payload.get("prompt") or "").strip()
+    if not message:
+        return ALLOW
+    root = state_dir(payload)
+    with open(root / "requests.lock", "w") as lock_file:
+        fcntl.flock(lock_file, fcntl.LOCK_EX)
+        recorded = _recorded_requests(payload) + [message]
+        (root / REQUESTS_FILE).write_text(json.dumps(recorded[-MAX_RECORDED_REQUESTS:]))
+    return ALLOW
+
+
 def on_pre(payload: dict[str, Any]) -> int:
     """Validate a pending Agent call.
 
@@ -151,6 +248,8 @@ def on_pre(payload: dict[str, Any]) -> int:
             f"subagent '{agent_type}' is not part of remi. Use only remi:worker (implementation), "
             "remi:reviewer (review) or remi:explorer (broad search)."
         )
+    if agent_type == "remi:reviewer":
+        _check_reviewer_prompt(payload)
     if not agent_type.endswith("worker"):
         return ALLOW
     with slots_locked(payload) as (pending_directory, active_directory):
@@ -212,7 +311,7 @@ def main() -> int:
         payload = read_payload()
     except ValueError:
         return ALLOW
-    handlers = {"pre": on_pre, "start": on_start, "stop": on_stop}
+    handlers = {"pre": on_pre, "start": on_start, "stop": on_stop, "prompt": on_prompt}
     handler = handlers.get(mode)
     return handler(payload) if handler else ALLOW
 

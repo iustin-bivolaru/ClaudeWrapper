@@ -70,10 +70,19 @@ If the request needs no code change (a question, an explanation), just answer: n
    - A subtask that needs real secrets to verify (the dev server, alembic against the dev DB) can't be run in the sandbox. Collect those commands and ask the user to run them.
 5. **Integrate.** Check each worker's report. Close any gap with `SendMessage` to that worker. Don't spawn a new worker for it.
    - Hooks have already run on each worker's own files: `ruff check --fix`, `ruff format` and lint when it finished, plus the tests when it was the last worker still running. Don't rerun them.
-6. **Review** (S/M/L, and XS changes in sensitive areas). Launch `remi:reviewer` with **only** the base branch: "Review the changes against `main`." Don't explain what was done or why: the reviewer must judge the code cold.
+6. **Review** (S/M/L, and XS changes in sensitive areas). Launch `remi:reviewer` with **only** the base branch and the user's request, copied verbatim:
+   ```
+   Review the changes against `main`.
+
+   <request>
+   <the user's original message, word for word>
+   </request>
+   ```
+   Add one more `<request>` block for each later user message that changed what was asked (such as a change to the worker map). Never summarise, reword or trim inside a block, and don't explain what was done or why: the reviewer must judge the code cold. A hook refuses any other text, and any quote that isn't a user message word for word.
    - A hook runs first. It refuses the review while any worker is still running, then runs `ruff check --fix`, `ruff format`, lint and the tests on the whole change. If it refuses, send each failure to the worker that owns the file, wait for those workers, and launch the review again.
 7. **Route the fixes.** When the review comes back:
    - Drop findings you can verify are wrong. Note them in your report.
+   - `[request: missing]` and `[request: extra]` findings come to you first: you may have misread the request. Re-read it. If the finding is right, re-plan the missing part and send it to the worker that owns the files (or a new worker for new files). Remove an extra only if it is clearly unwanted; otherwise ask the user. If you still think the change matches, say why in your report. List `[request: unclear]` items in your report for the user.
    - Group the remaining findings by file and look up the **worker that owns each file** in the worker map.
    - Send each worker **only its own findings** with `SendMessage`, quoting them verbatim with file:line, using the review-fix shape from `writing-worker-briefs` (findings first, the instructions repeated at the end). Workers that have something to fix run in parallel. Each one's stop hook checks its fixes again.
    - If the owning worker is gone, start a new `remi:worker` with just those findings and files. A finding that spans several workers' files goes to one of them, which then owns all of those files.

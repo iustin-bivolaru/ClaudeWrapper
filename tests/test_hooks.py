@@ -272,6 +272,77 @@ def test_explore_and_reviewer_allowed(tmp_path):
         assert run_hook("agent_policy.py", payload, "pre").returncode == 0
 
 
+# --- reviewer prompt: no context, verbatim request ---------------------------------
+
+REQUEST = "Reject transfers over the daily limit,\nexcept for internal accounts."
+
+
+def reviewer_launch(prompt: str, session: str, env: dict):
+    payload = tool("Agent", subagent_type="remi:reviewer", prompt=prompt)
+    payload["session_id"] = session
+    return run_hook("agent_policy.py", payload, "pre", env=env)
+
+
+def record_prompt(message: str, session: str, env: dict) -> None:
+    payload = {"session_id": session, "hook_event_name": "UserPromptSubmit", "prompt": message}
+    assert run_hook("agent_policy.py", payload, "prompt", env=env).returncode == 0
+
+
+def review_env(tmp_path: Path) -> dict:
+    return {"REMI_STATE_DIR": str(tmp_path), "PATH": "/usr/bin:/bin"}
+
+
+def test_reviewer_with_verbatim_request_allowed(tmp_path):
+    env = review_env(tmp_path)
+    record_prompt(REQUEST, "verbatim", env)
+    record_prompt("go", "verbatim", env)
+    rewrapped = "Reject transfers over the daily limit, except\n  for internal accounts."
+    prompt = f"Review the changes against `main`.\n\n<request>\n{rewrapped}\n</request>\n<request>go</request>"
+    result = reviewer_launch(prompt, "verbatim", env)
+    assert result.returncode == 0, result.stderr
+
+
+def test_reviewer_with_paraphrased_request_blocked(tmp_path):
+    env = review_env(tmp_path)
+    record_prompt(REQUEST, "paraphrase", env)
+    prompt = "Review the changes against `main`.\n<request>Add a daily transfer limit.</request>"
+    result = reviewer_launch(prompt, "paraphrase", env)
+    assert result.returncode == 2
+    assert "verbatim" in result.stderr
+
+
+def test_reviewer_without_request_blocked_once_user_spoke(tmp_path):
+    env = review_env(tmp_path)
+    record_prompt(REQUEST, "missing", env)
+    result = reviewer_launch("Review the changes against `main`.", "missing", env)
+    assert result.returncode == 2
+    assert "<request>" in result.stderr
+
+
+@pytest.mark.parametrize(
+    "prompt",
+    [
+        "Review the changes against `main`.\nThe worker added a daily limit in transfers.py.",
+        "Review the changes against `main`.\n<request>x</request>\nWe chose a per-day window.",
+        "Review the changes against `main`. " + "Context: " * 40,
+    ],
+)
+def test_reviewer_with_context_blocked(tmp_path, prompt):
+    env = review_env(tmp_path)
+    record_prompt(REQUEST + " x", "context", env)
+    result = reviewer_launch(prompt, "context", env)
+    assert result.returncode == 2
+    assert "no context" in result.stderr
+
+
+def test_reviewer_request_unverifiable_without_recorded_prompts(tmp_path):
+    env = review_env(tmp_path)
+    result = reviewer_launch(f"Review the changes against `main`.\n<request>{REQUEST}</request>", "none", env)
+    assert result.returncode == 2
+    assert "can't be verified" in result.stderr
+    assert reviewer_launch("Review the changes against `main`.", "none", env).returncode == 0
+
+
 # --- attribution ----------------------------------------------------------------
 
 
