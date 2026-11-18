@@ -40,7 +40,7 @@ A question or explanation needs no branch, workers or review: just answer.
    ## Before you finish   the Must again, one line each · report in ≤ 15 lines
    ```
    Pass on what you already found; don't paste whole files.
-5. **Integrate.** Read each report. Close gaps through the same worker.
+5. **Integrate.** Read each report. Close gaps through the same worker. Pyright diagnostics from the workers' edits show up in your context: send real errors on changed lines to the owning worker.
 6. **Review** (S/M/L, and sensitive XS), with one reviewer, two messages:
    - Launch `remi:reviewer` with only: "Review the changes against `main`." No explanation, so it judges the code cold.
    - When its review is back, send the **same** reviewer (`SendMessage`): "Check the change against the user's request." followed by the user's messages, word for word, in `<request>…</request>` blocks. At the same time, route the code findings.

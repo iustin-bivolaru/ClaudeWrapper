@@ -9,6 +9,7 @@ A lean layer over Claude Code for client work in banking and finance. `remi` is 
 | **Reviewer** (Opus, read-only) | Reviews the diff cold (launched with only the base branch), then checks it against your request, quoted word for word. |
 | **Explorer** (Haiku, read-only) | Cheap search for broad sweeps. |
 | **Skills** | `service-architecture` (the reference layout and layers, from nexttech-assistant-svc), `python-service-style` (house style, preloaded in workers), `add-*` checklists (`add-api-endpoint`, `add-setting`, `add-migration`, `add-integration`, `add-outbox-job`, `add-sub-agent`, `add-agent-tool`), `agent-orchestration-architecture`, `git-ship`, `onboard`. |
+| **pyright-lsp** (official plugin, enabled in `settings.json`) | Type errors after every edit and an `LSP` tool for definitions and references. Workers and the reviewer get the tool; workers also run `pyright` on their files before reporting, because diagnostics only reach the main session. |
 | **Hooks** | Secret and git guard, format and lint on every edit, a full gate on every commit, a merge gate. |
 | **Sandbox** | Bash runs in the OS sandbox: secret files unreadable, network through an allowlist. |
 
@@ -17,6 +18,7 @@ A lean layer over Claude Code for client work in banking and finance. `remi` is 
 ```bash
 ./install.sh                                     # symlinks bin/remi into ~/.local/bin
 brew install gh && gh auth login -h github.com   # required: remi creates repos, pushes and opens PRs
+uv tool install pyright                          # type errors and code navigation (install.sh does this)
 brew install gitleaks                            # optional: stronger secret scan at commit
 ```
 Requires `claude` and `python3` (3.11+); the target project needs `uv` or `ruff`/`pytest`.

@@ -42,7 +42,7 @@ uv run python scripts/bench_hooks.py               # processes and ms per tool c
 
 Review state lives per session under `REMI_STATE_DIR` (default `$TMPDIR/remi/<session_id>`). `quality.py` finds target-project tools in this order: `.venv/bin`, `uv run`, `PATH`, `uvx ruff`; `[tool.remi]` in the target's pyproject overrides them.
 
-**Settings (`settings/settings.json`).** Read deny rules for secret files, the OS sandbox (secret `denyRead`, network allowlist, no unsandboxed escape) and empty attribution. `SECRET_PATH_PATTERNS` in `_common.py` is mirrored here, so change both together.
+**Settings (`settings/settings.json`).** Enables the official `pyright-lsp` plugin (needs `pyright-langserver` on PATH; `install.sh` installs it). Its diagnostics reach only the main session, so workers run `pyright` on their files themselves. Read deny rules for secret files, the OS sandbox (secret `denyRead`, network allowlist, no unsandboxed escape) and empty attribution. `SECRET_PATH_PATTERNS` in `_common.py` is mirrored here, so change both together.
 
 ## Tests
 
