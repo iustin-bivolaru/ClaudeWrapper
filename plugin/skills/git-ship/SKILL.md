@@ -15,7 +15,7 @@ git switch -c <type>/<short-kebab-slug>   # only if on a protected branch
 Types: `feat`, `fix`, `refactor`, `chore`, `docs`, `test`, `perf`. Include a ticket id when the user gave one: `feat/PAY-123-sepa-instant`.
 If the working tree already has unrelated changes, tell the user instead of mixing them in.
 
-## 2. Commit (after the reviewer approved)
+## 2. Commit (after the reviewer approved and checked the change against the request)
 Stage **explicit paths** — never `git add -A`/`git add .` blindly:
 ```bash
 git status --short
