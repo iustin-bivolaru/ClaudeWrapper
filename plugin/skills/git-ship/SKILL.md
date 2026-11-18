@@ -1,6 +1,6 @@
 ---
 name: git-ship
-description: Branch, commit, push and PR workflow (PR text via writing-prs) - create a feature branch before editing, stage explicit paths, conventional commit messages without any Claude attribution, push the branch (never protected branches, never force), open a pull request with gh. Use when starting a task on main or when committing, pushing or opening a PR.
+description: Branch, commit, push, PR and merge workflow (PR text via writing-prs) - create a feature branch before editing, stage explicit paths, conventional commit messages without any Claude attribution, push the branch (never protected branches, never force), open a pull request with gh. Use when starting a task on main or when committing, pushing or opening a PR.
 ---
 
 # Branch → commit → push
@@ -90,5 +90,15 @@ If the remote has diverged on your own branch: `git pull --rebase origin <branch
 Load the **`writing-prs`** skill. It covers gathering the facts, the title, the body template, the security rules, and `gh pr create --body-file`.
 - If a PR already exists for the branch (`gh pr view`), pushing updates its commits. Also update its description when what the PR does has changed (`writing-prs`, step 5).
 
-## 5. Report
-The branch name, the commit hash(es) (`git log --oneline -n 3`) and the PR URL.
+## 5. Merge (only after an approving, matching review)
+remi merges its own PR when the **latest** review said `VERDICT: APPROVE` and `REQUEST: MATCHES`. Pin the merge to the commit that was reviewed:
+```bash
+git rev-parse HEAD
+gh pr merge --merge --delete-branch --match-head-commit <full sha from above>
+```
+- Run it on its own, like every `gh` command. `--merge` keeps the Conventional Commit messages in `main`. `--delete-branch` also switches you back to `main`.
+- A hook refuses the merge when the review isn't both `APPROVE` and `MATCHES`, when no review ran (XS), when HEAD holds anything the reviewer didn't see (a fix made after the approval needs a new review, both steps), when `--match-head-commit` isn't HEAD, and always with `--admin`.
+- If GitHub refuses (failing checks, branch protection, a conflict), leave the PR open and report why. Don't retry with other flags.
+
+## 6. Report
+The branch name, the commit hash(es) (`git log --oneline -n 3`), the PR URL, and whether it was merged or why it was left open.

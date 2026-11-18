@@ -1056,3 +1056,127 @@ def test_launcher_starts_when_github_ready(tmp_path, scopes):
     result = run_launcher(tmp_path, f"printf '{response}'")
     assert result.returncode == 0, result.stderr
     assert "CLAUDE STARTED" in result.stdout
+
+
+# --- merge gate: only after APPROVE + MATCHES, on exactly the reviewed files -------------
+
+
+def reviewer_stops(repo: Path, session: str, agent_id: str, message: str, env: dict) -> None:
+    payload = {
+        "session_id": session,
+        "agent_type": "remi:reviewer",
+        "agent_id": agent_id,
+        "cwd": str(repo),
+        "last_assistant_message": message,
+    }
+    assert run_hook("quality.py", payload, "worker", env=env).returncode == 0
+
+
+def reviewed_change(repo: Path, tmp_path: Path, verdict: str = "APPROVE", request: str = "MATCHES") -> dict:
+    env = review_env(tmp_path)
+    git(repo, "switch", "-qc", "feat/x")
+    (repo / "service.py").write_text("ANSWER = 42\n")
+    start_reviewer("merge", "reviewer-one", env)
+    reviewer_stops(repo, "merge", "reviewer-one", f"VERDICT: {verdict}\n- [severity: low] ...", env)
+    reviewer_stops(repo, "merge", "reviewer-one", f"Request check:\nREQUEST: {request}", env)
+    git(repo, "add", "service.py")
+    git(repo, "commit", "-qm", "feat: add service")
+    return env
+
+
+def merge(repo: Path, env: dict, extra: str = "", pin: bool = True):
+    head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True).stdout.strip()
+    command = "gh pr merge --merge --delete-branch" + (f" --match-head-commit {head}" if pin else "") + extra
+    payload = tool("Bash", cwd=repo, command=command)
+    payload["session_id"] = "merge"
+    return run_hook("merge_gate.py", payload, env=env)
+
+
+def test_merge_after_approve_and_matches_allowed(repo, tmp_path):
+    env = reviewed_change(repo, tmp_path)
+    result = merge(repo, env)
+    assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize(("verdict", "request_result"), [("CHANGES_REQUESTED", "MATCHES"), ("APPROVE", "GAPS")])
+def test_merge_without_approval_and_match_blocked(repo, tmp_path, verdict, request_result):
+    env = reviewed_change(repo, tmp_path, verdict, request_result)
+    result = merge(repo, env)
+    assert result.returncode == 2
+    assert f"VERDICT: {verdict}, REQUEST: {request_result}" in result.stderr
+
+
+def test_merge_without_review_blocked(repo, tmp_path):
+    result = merge(repo, review_env(tmp_path))
+    assert result.returncode == 2
+    assert "no finished review" in result.stderr
+
+
+def test_merge_must_pin_head(repo, tmp_path):
+    env = reviewed_change(repo, tmp_path)
+    result = merge(repo, env, pin=False)
+    assert result.returncode == 2
+    assert "--match-head-commit" in result.stderr
+
+
+def test_merge_with_admin_blocked(repo, tmp_path):
+    env = reviewed_change(repo, tmp_path)
+    assert "--admin" in merge(repo, env, extra=" --admin").stderr
+
+
+def test_merge_after_change_since_review_blocked(repo, tmp_path):
+    env = reviewed_change(repo, tmp_path)
+    (repo / "service.py").write_text("ANSWER = 43\n")
+    git(repo, "commit", "-qam", "fix: tweak after approval")
+    result = merge(repo, env)
+    assert result.returncode == 2
+    assert "service.py" in result.stderr
+
+
+def test_merge_blocked_while_newer_review_unfinished(repo, tmp_path):
+    env = reviewed_change(repo, tmp_path)
+    start_reviewer("merge", "reviewer-two", env)
+    assert merge(repo, env).returncode == 2
+
+
+def test_uncommitted_stray_file_does_not_block_merge(repo, tmp_path):
+    env = review_env(tmp_path)
+    git(repo, "switch", "-qc", "feat/x")
+    (repo / "service.py").write_text("ANSWER = 42\n")
+    (repo / "scratch.txt").write_text("notes\n")
+    start_reviewer("merge", "reviewer-one", env)
+    reviewer_stops(repo, "merge", "reviewer-one", "VERDICT: APPROVE", env)
+    reviewer_stops(repo, "merge", "reviewer-one", "REQUEST: MATCHES", env)
+    git(repo, "add", "service.py")
+    git(repo, "commit", "-qm", "feat: add service")
+    result = merge(repo, env)
+    assert result.returncode == 0, result.stderr
+
+
+def test_verdict_read_from_transcript_when_message_missing(repo, tmp_path):
+    env = review_env(tmp_path)
+    git(repo, "switch", "-qc", "feat/x")
+    (repo / "service.py").write_text("ANSWER = 42\n")
+    start_reviewer("merge", "reviewer-one", env)
+    transcript = tmp_path / "agent.jsonl"
+    for text in ("VERDICT: APPROVE", "REQUEST: MATCHES"):
+        entry = {"type": "assistant", "message": {"content": [{"type": "text", "text": text}]}}
+        transcript.write_text(json.dumps(entry) + "\n")
+        payload = {"session_id": "merge", "agent_type": "remi:reviewer", "agent_id": "reviewer-one", "cwd": str(repo)}
+        payload["agent_transcript_path"] = str(transcript)
+        assert run_hook("quality.py", payload, "worker", env=env).returncode == 0
+    git(repo, "add", "service.py")
+    git(repo, "commit", "-qm", "feat: add service")
+    result = merge(repo, env)
+    assert result.returncode == 0, result.stderr
+
+
+def test_other_commands_pass_merge_gate(repo, tmp_path):
+    payload = tool("Bash", cwd=repo, command="gh pr view --json state")
+    assert run_hook("merge_gate.py", payload, env=review_env(tmp_path)).returncode == 0
+
+
+def test_merge_gate_uses_repo_of_current_directory(repo, tmp_path):
+    env = reviewed_change(repo, tmp_path) | {"CLAUDE_PROJECT_DIR": "/"}  # remi launched outside the repo
+    result = merge(repo, env)
+    assert result.returncode == 0, result.stderr

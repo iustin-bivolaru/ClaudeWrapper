@@ -137,6 +137,11 @@ you: task ─▶ orchestrator: new project? git init · empty first commit on ma
                                   format · lint · tests
                           ▼
               push branch ─▶ gh pr create
+                          ▼
+              merge gate (hook): latest review APPROVE + MATCHES · HEAD is exactly
+                          what was reviewed · pinned with --match-head-commit
+                          ▼
+              gh pr merge --merge --delete-branch   (otherwise the PR stays open)
 ```
 
 ## Security layers (defence in depth)
@@ -156,6 +161,7 @@ you: task ─▶ orchestrator: new project? git init · empty first commit on ma
 - Files are staged and committed in separate commands, so the gate checks exactly what gets committed.
 - **Conventional Commits, enforced.** Commit headers must look like `<type>(<scope>)!: <description>`. PR titles are plain, readable sentences about the outcome (e.g. `Add SEPA instant payments to transfers`), never a copied commit message. Allowed types: `feat`, `fix`, `refactor`, `perf`, `test`, `docs`, `build`, `ci`, `chore`, `style`, `revert`. The description is lowercase with no trailing period, and the header is ≤ 100 characters (72 recommended). Messages must be passed with `-m`, so editor and `-F` commits are refused.
 - The orchestrator commits, pushes with a standalone `git push origin HEAD`, and opens the PR with `gh pr create`.
+- **It merges its own PR, with no human in the loop, only after an approving, matching review:** the latest reviewer said `VERDICT: APPROVE` and `REQUEST: MATCHES`, HEAD holds exactly the files the reviewer saw, and the merge is pinned with `--match-head-commit`. Otherwise the PR stays open for you. `--admin` is never allowed. Low findings that come with an approval are listed as follow-ups instead of being fixed, because a fix after the approval would need a new review. Turn on branch protection with required checks on GitHub if CI should also gate the merge.
 - **No Claude attribution.** The `attribution` settings are empty, and the guard blocks `Co-Authored-By: Claude` and "Generated with Claude Code" in commits and PRs. You are the only author.
 
 ## Quality gate
@@ -175,6 +181,7 @@ So one fixed line in an old module stays a one-line diff, and workers don't spen
 | Before `remi:reviewer` starts | Every worker must be finished. Then `ruff check --fix` + `ruff format` on the whole change, followed by naming → format check → lint → typecheck → tests. If anything is red, the review is refused and the failures go to the workers. |
 | When `remi:reviewer` is launched | Its prompt must be one base-branch line. Explanations, plans and your request are refused, so the code review is blind. |
 | When the request goes to the reviewer (`SendMessage`) | One instruction line plus your messages quoted word for word in `<request>` blocks (your messages are recorded by a `UserPromptSubmit` hook). Explanations, plans and reworded quotes are refused. |
+| Before `gh pr merge` | the latest review said `APPROVE` and `MATCHES` → every file in HEAD matches the snapshot taken when the code review finished → `--match-head-commit` is HEAD → no `--admin`; otherwise the merge is refused |
 | Before `git commit` | request check sent to the latest reviewer (if one ran) → secret scan → naming (staged files) → format check → lint → tests; the commit is refused on failure |
 
 Tools are found automatically (`.venv/bin`, then `uv run`, then `PATH`, then `uvx ruff`). For a `package.json`-only project, the gate uses the npm scripts `format:check`, `lint`, `typecheck` and `test`. To override per project:
