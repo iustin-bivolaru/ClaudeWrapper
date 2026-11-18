@@ -10,7 +10,7 @@ The pattern: one root `Settings(BaseSettings)` made of `XxxSettings(BaseModel)` 
 ## Steps
 1. **Group**: add a field to an existing group, or create a new group class next to the others.
    - Use precise types: `PositiveInt`, `NonNegativeInt`, `HttpUrl`, `SecretStr` for every secret (read it with `.get_secret_value()` only where it is used).
-   - Declare every field with `Annotated`: `max_items: Annotated[PositiveInt, Field(description="...")] = 50`. Never use `max_items: int = Field(default=50, ...)`. See `pydantic-annotated`. Give a default when a sensible one exists. Leave the field required when a missing value should stop startup.
+   - Declare every field with `Annotated`: `max_items: Annotated[PositiveInt, Field(description="...")] = 50`. Never use `max_items: int = Field(default=50, ...)`. Give a default when a sensible one exists. Leave the field required when a missing value should stop startup.
    - Cross-field rules go in `@model_validator(mode="after")`. Raise the project's application error with a specific code if it has one, so pydantic doesn't wrap it in a generic `ValueError`.
 2. **Root**: add the group to `Settings`, with `Field(default_factory=XxxSettings)` if every field has a default, otherwise as a required field.
 3. **Env example**: add every new key, with an empty or safe value, to `.env.example` (or its equivalent) in the matching block. That file is the list of env vars teammates see.

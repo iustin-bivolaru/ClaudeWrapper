@@ -79,23 +79,7 @@
       "Read(~/.pgpass)",
       "Read(~/.git-credentials)",
       "Read(~/.npmrc)",
-      "Read(~/.pypirc)",
-      "Edit(**/.env)",
-      "Edit(**/.env.local)",
-      "Edit(**/.env.*.local)",
-      "Edit(**/.env.prod*)",
-      "Edit(**/.env.dev*)",
-      "Edit(**/.env.stag*)",
-      "Edit(**/.env.test*)",
-      "Edit(**/.env.uat*)",
-      "Edit(**/.env.qa*)",
-      "Edit(**/.envrc)",
-      "Edit(**/*.pem)",
-      "Edit(**/*.key)",
-      "Edit(~/.ssh/**)",
-      "Edit(~/.aws/**)",
-      "Bash(printenv *)",
-      "Bash(sudo *)"
+      "Read(~/.pypirc)"
     ]
   },
   "sandbox": {

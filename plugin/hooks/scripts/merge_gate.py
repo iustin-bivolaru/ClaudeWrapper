@@ -1,9 +1,9 @@
 """Merge gate: remi merges its own PR only after an approving, matching review.
 
-* ``record_review`` - called from ``quality.py worker`` when a reviewer stops. The
-  code review's ``VERDICT`` is stored with a snapshot (path -> git blob id) of every
-  non-ignored file the reviewer saw; the request check's ``REQUEST`` is stored next
-  to it. A new reviewer starts a fresh record.
+* ``record_review`` - SubagentStop of a reviewer. The code review's ``VERDICT`` is stored
+  with a snapshot (path -> git blob id) of every non-ignored file the reviewer saw; the
+  request check's ``REQUEST`` (a later stop of the same reviewer) is stored next to it.
+  The last reviewer to stop owns the record: a different reviewer starts a fresh one.
 * PreToolUse on Bash - ``gh pr merge`` is allowed only when the latest reviewer said
   ``VERDICT: APPROVE`` and ``REQUEST: MATCHES``, every file in HEAD is exactly what it
   reviewed, and the merge is pinned to HEAD with ``--match-head-commit``. ``--admin``
@@ -22,7 +22,6 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).parent))
 
 from _common import ALLOW, block, is_secret_path, project_dir, state_dir  # noqa: E402
-from agent_policy import REVIEWERS_DIRECTORY, _slot_name  # noqa: E402
 
 REVIEW_STATE_FILE = "review-state.json"
 VERDICT_PATTERN = re.compile(r"VERDICT:\s*(APPROVE|CHANGES_REQUESTED)")
@@ -140,29 +139,13 @@ def _load_state(payload: dict[str, Any]) -> dict[str, Any]:
     return state if isinstance(state, dict) else {}
 
 
-def latest_reviewer(payload: dict[str, Any]) -> str:
-    """Return the id of the reviewer that started most recently.
-
-    Args:
-        payload: Hook payload (scopes state to the session).
-
-    Returns:
-        The newest reviewer id, or "" when no reviewer ran this session.
-    """
-    directory = state_dir(payload) / REVIEWERS_DIRECTORY
-    if not directory.is_dir():
-        return ""
-    markers = sorted(directory.iterdir(), key=lambda marker: marker.stat().st_mtime)
-    return markers[-1].name if markers else ""
-
-
 def record_review(payload: dict[str, Any]) -> None:
     """Store a stopping reviewer's verdict, request result and reviewed snapshot.
 
     Args:
         payload: SubagentStop payload for a reviewer.
     """
-    reviewer = _slot_name(payload)
+    reviewer = str(payload.get("agent_id") or "reviewer")
     message = _last_message(payload)
     state = _load_state(payload)
     if state.get("reviewer") != reviewer:
@@ -211,8 +194,7 @@ def check_merge(payload: dict[str, Any]) -> int:
     if re.search(r"\s--admin\b", command):
         block("`gh pr merge --admin` bypasses branch protection. remi never uses it.")
     state = _load_state(payload)
-    reviewer = latest_reviewer(payload)
-    if not reviewer or state.get("reviewer") != reviewer:
+    if not state.get("reviewer"):
         block(
             "no finished review covers this change, so remi doesn't merge it. Merging needs the latest reviewer's "
             "VERDICT: APPROVE and REQUEST: MATCHES. Leave the PR open for the user."
