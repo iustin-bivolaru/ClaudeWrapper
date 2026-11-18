@@ -59,7 +59,7 @@ cd ~/PycharmProjects/existing-service
 remi onboard
 ```
 A **read-only** report. It changes nothing in the project, and never opens secret files.
-- **Git and GitHub:** branch, default branch, remote, uncommitted changes, `gh` login.
+- **Git and GitHub:** branch, default branch, remote, uncommitted changes, `gh` login (a failure: `remi` won't start without it).
 - **Tooling:** pyproject, ruff, pytest, mypy, Makefile targets, and any existing `[tool.remi]` overrides.
 - **Code baseline:** how far the existing code is from the house style (unformatted files, project lint findings, missing docstrings, naming, f-strings in log calls, relative imports, single-letter names). It's information only: existing code is checked only where you change it (see "Legacy-safe" below).
 - **CLAUDE.md:** files found, and any over the 200-line limit.
@@ -106,7 +106,11 @@ Agent frontmatter is static, so `remi` writes a copy of the plugin with the work
 ## The pipeline
 
 ```
-you: task ─▶ orchestrator: size it (XS/S/M/L), plan, worker map
+remi launch: gh logged in with the `repo` scope? no ⇒ refuses to start
+             ▼
+you: task ─▶ orchestrator: new project? git init · empty first commit on main ·
+             │             private GitHub repo (gh repo create --push) · feature branch
+             │  size it (XS/S/M/L; a new project is at least M), plan, worker map
              │  (M/L: waits for you to approve the worker map)
              │
              ├─ XS ─▶ orchestrator edits directly ─────────────────────────────┐
@@ -120,14 +124,17 @@ you: task ─▶ orchestrator: size it (XS/S/M/L), plan, worker map
                           ruff check --fix · ruff format · lint · tests on the  │
                           whole change; red ⇒ review refused, fix via workers   │
                           ▼                                                     │
-              remi:reviewer (no context, only "against main")                   │
-                          ▼ then SendMessage: your request, verbatim            │
-              same reviewer: does it do what you asked?                         │
+              remi:reviewer (no context, only "against main"): code review      │
+                          ▼  then, in parallel:                                 │
+              ├─ same reviewer gets your request, verbatim (SendMessage):       │
+              │    does it do what you asked? missing / extra / unclear         │
+              └─ code findings ─▶ owning worker(s) fix (SendMessage)            │
                           ▼                                                     │
-              findings ─▶ orchestrator ─▶ owning worker(s) fix (SendMessage)    │
-                          critical/high ⇒ one more review                       │
+              request findings ─▶ orchestrator re-plans or asks you             │
+                          critical/high ⇒ one more review (both steps)          │
                           ▼                                                     ▼
-              commit gate (hook): secret scan · naming · format · lint · tests
+              commit gate (hook): request check sent · secret scan · naming ·
+                                  format · lint · tests
                           ▼
               push branch ─▶ gh pr create
 ```
