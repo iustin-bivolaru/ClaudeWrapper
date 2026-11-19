@@ -1059,6 +1059,7 @@ def test_onboard_prompt_carries_findings(onboarding_repo):
     assert "CLAUDE.md: 250 lines" in prompt
     assert "service-architecture" in prompt and "chore/remi-onboarding" in prompt
     assert "`typecheck`" in prompt and "Risk map" in prompt and "questions the code can't answer" in prompt
+    assert "Improvement plan" in prompt and "docs/improvement-plan.md" in prompt and "own remi task" in prompt
 
 
 def test_onboard_sees_git_ignored_claude_md(repo):
