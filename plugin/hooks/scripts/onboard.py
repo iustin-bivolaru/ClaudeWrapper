@@ -454,7 +454,7 @@ def onboarding_prompt(report: Report) -> str:
         "`service-architecture` skill.\n"
         "2. Run the real lint, format, typecheck and test commands; don't guess them. Record which fail and which "
         "need real secrets (I run those with `!`). Propose a `[tool.remi]` block in pyproject.toml only where the "
-        "defaults don't fit.\n"
+        "defaults don't fit. Its keys are `fix`, `format`, `lint`, `typecheck` and `test`, each a shell command.\n"
         "3. Risk map: list the modules that move money, handle PII, do authentication/authorization, or hold "
         "migrations, as paths with one line each.\n"
         f"4. Draft CLAUDE.md (at most {max_lines()} lines): commands, layout, the risk map, conventions that differ "
