@@ -459,11 +459,17 @@ def onboarding_prompt(report: Report) -> str:
         f"4. Draft CLAUDE.md (at most {max_lines()} lines): commands, layout, the risk map, conventions that differ "
         "from our house style, and gotchas. Leave out what linters and hooks already enforce. If the repo has several "
         "packages or services, keep the root file short and add one CLAUDE.md per package (also within the limit).\n"
-        "5. List fixes for the warnings above, in order of importance.\n"
+        "5. Improvement plan: turn the warnings above and what steps 1-3 found into a ranked list, most important "
+        "first: (a) security and correctness risks (committed secrets, unsafe auth, money as float, swallowed "
+        "errors); (b) risk-map modules without tests; (c) failing or missing lint, typecheck and test commands; "
+        "(d) architecture drift from `service-architecture`; (e) house-style debt worth fixing beyond the "
+        "changed-lines rule. Each item: what, where (paths), why it matters, size (XS/S/M/L) and a one-line remi "
+        "task to run it later. Skip what isn't worth doing; say so rather than padding the list.\n"
         "6. End the plan with a short list of questions the code can't answer (domain rules, regulated areas, "
         "code not to touch, deploy constraints). I answer them before approving; put the answers in CLAUDE.md.\n"
-        "After approval: branch `chore/remi-onboarding`, write the CLAUDE.md files (and `[tool.remi]` if needed), "
-        "commit, push and open a PR."
+        "After approval: branch `chore/remi-onboarding`, write the CLAUDE.md files (and `[tool.remi]` if needed) and "
+        "the improvement plan as `docs/improvement-plan.md` (linked from CLAUDE.md), commit, push and open a PR. "
+        "Don't fix the plan's items in this PR: each one ships later as its own remi task."
     )
 
 
@@ -500,7 +506,11 @@ def main(arguments: list[str]) -> int:
     remi_launcher = Path(os.environ.get("REMI_HOME", Path(__file__).resolve().parents[3])) / "bin" / "remi"
     interactive = sys.stdin.isatty() and sys.stdout.isatty() and "--no-prompt" not in arguments
     if interactive:
-        answer = input("\nStart a plan-mode session that maps the project and writes CLAUDE.md? [y/N] ").strip().lower()
+        answer = (
+            input("\nStart a plan-mode session that maps the project, writes CLAUDE.md and an improvement plan? [y/N] ")
+            .strip()
+            .lower()
+        )
         if answer in {"y", "yes"}:
             os.execv(str(remi_launcher), [str(remi_launcher), "--plan", prompt])  # noqa: S606 - hand over to our own launcher
     print('\nTo start the onboarding session later:  remi --plan "$(remi onboard --print-prompt)"')
