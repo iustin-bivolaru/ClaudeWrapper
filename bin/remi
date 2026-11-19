@@ -3,6 +3,7 @@
 # Runs Claude Code with the orchestrator agent, the remi plugin (workers, reviewer,
 # skills, hooks) and the hardened sandbox settings.
 # Every claude flag and subcommand works: `remi -c`, `remi -p "..."`, `remi mcp list`.
+# `remi new <folder> ["request"]` starts a new project: creates the folder, then runs remi in it.
 #
 # Model and effort per role. Precedence: CLI flag > environment > config file > default.
 #   REMI_ORCHESTRATOR_MODEL  (opus)    REMI_ORCHESTRATOR_EFFORT (medium)   also: --model / --effort
@@ -36,6 +37,18 @@ case "${1:-}" in
   onboard)  # remi's own read-only readiness report for an existing project
     shift
     exec python3 "$REMI_HOME/plugin/hooks/scripts/onboard.py" "$@" ;;
+  new)  # new project: create the folder and start there, so the repo bootstrap below applies to it
+    shift
+    if [ -z "${1:-}" ] || [[ $1 == -* ]]; then
+      echo "remi: usage: remi new <folder> [\"request\"] [claude flags]" >&2; exit 2
+    fi
+    mkdir -p -- "$1"
+    cd -- "$1"
+    shift
+    if enclosing_repo="$(git rev-parse --show-toplevel 2>/dev/null)"; then
+      echo "remi: '$PWD' is inside the git repository '$enclosing_repo'; create the new project outside it." >&2
+      exit 2
+    fi ;;
   ship)  # commit, push, PR and merge for the orchestrator (in a session; gated like the hooks)
     shift
     exec python3 "$REMI_HOME/plugin/hooks/scripts/ship.py" "$@" ;;
@@ -182,6 +195,11 @@ if [ "$is_print_mode" = false ] && [ "$REMI_NEW_REPO" != off ] && [ "$PWD" != "$
   project_folder="${PWD##*/}"
   repo_name="$(printf '%s' "$project_folder" | tr -c 'A-Za-z0-9._-' '-')"
   new_repo_choice="$REMI_NEW_REPO"
+  # A folder whose subfolders are repositories holds projects; it isn't one. Point to `remi new`.
+  if [ "$new_repo_choice" = ask ] && [ -n "$(find . -mindepth 2 -maxdepth 2 -name .git -print -quit 2>/dev/null)" ]; then
+    echo "remi: '$project_folder' holds other projects and isn't one itself. To start a new project, exit and run: remi new <folder> [\"request\"]" >&2
+    new_repo_choice=off
+  fi
   if [ "$new_repo_choice" = ask ]; then
     if [ -t 0 ] && [ -t 1 ]; then
       printf "remi: '%s' is not a git repository, and the session can't create one (the sandbox locks a .git made mid-session).\n" "$project_folder"
