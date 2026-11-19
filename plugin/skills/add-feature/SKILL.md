@@ -1,11 +1,11 @@
 ---
 name: add-feature
-description: Checklists of the easy-to-miss pieces when adding an API endpoint, a setting, an Alembic migration, an external integration, an outbox job, an LLM sub-agent or an agent tool in a FastAPI + SQLAlchemy + Pydantic (+ LangGraph) service. Use when planning or doing one of those changes; read only the section you need.
+description: Checklists of the easy-to-miss pieces when adding an API endpoint, a setting, an Alembic migration, an external integration, an outbox job or an LLM agent tool in a FastAPI + SQLAlchemy + Pydantic (+ LangGraph) service. Use when planning or doing one of those changes; read only the section you need.
 ---
 
 # Add a feature
 
-Copy the closest existing example in the project end to end, and follow `service-architecture` (or `agent-orchestration-architecture`) for where code goes. These lists hold only what is easy to miss. A missing piece usually means the feature silently doesn't work.
+Copy the closest existing example in the project end to end, and follow `service-architecture` for where code goes. These lists hold only what is easy to miss. A missing piece usually means the feature silently doesn't work.
 
 ## API endpoint
 - New table: export it where `alembic/env.py` imports the models (autogenerate sees only imported tables), then write a migration (below). Postgres enums: `Enum(PyEnum, name=..., values_callable=lambda m: [x.value for x in m])` so the DB stores values.
@@ -41,17 +41,6 @@ Copy the closest existing example in the project end to end, and follow `service
 - Enqueue in the **same session** as the business write. Payload keys are `Final` constants; ids are stored as strings.
 - Handler method calls one service method, is idempotent, and is added to the consumer's dispatch. Check any type-specific post-processing in the consumer includes or excludes the new type on purpose.
 - Raise to retry; log and return for failures that will never succeed. Periodic work: a scanner that only enqueues, cron in settings.
-
-## LLM sub-agent
-Every piece must exist, or the agent is never offered or startup crashes:
-- agent-name enum (Postgres enum → migration) and route tool name;
-- the agent package (mirror the smallest complete agent), graph built once in `__init__`, a tool-filter middleware so framework built-ins are hidden, `astream` yielding only the event contract (≤1 payload);
-- route tool whose description says when to use it **and when not to**, registered in the orchestrator;
-- invoker (own thread id `f"{conversation_id}:{agent}"`, tracing callback, form data) and catalogue entry;
-- built and registered in the composition root (only if its integration is enabled);
-- added to every role allowed to use it in the entitlements file;
-- settings group with at least a recursion limit.
-Then send a chat turn as each role and check routing in the trace.
 
 ## Agent tool
 - Name in the agent's tool-name enum; input model with `Field(description=...)` written for the model, limits, and `None` defaults ("leave null if unsure") for values the model may not know.

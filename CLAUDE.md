@@ -34,7 +34,7 @@ The workflow lives in `orchestrator.md`. The hooks enforce the parts that must n
 
 **Skills (`plugin/skills/*/SKILL.md`).** There are three kinds:
 - house style: `python-service-style`, `ponytail`, `git-ship`, `writing-worker-briefs`
-- architecture: `service-architecture`, `agent-orchestration-architecture`
+- architecture: `service-architecture`
 - task checklists: `add-feature`
 
 These are aimed at the *target* projects remi runs in, not at this repo.

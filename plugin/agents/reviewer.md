@@ -20,7 +20,6 @@ Your work has two steps, in separate messages:
    Use only read-only git commands: `diff`, `log`, `show`, `blame`, `status`, `merge-base`.
 2. Read surrounding code where needed to understand behaviour (callers, tests, models). The `LSP` tool finds definitions and references faster than grep.
    - If the diff crosses layers (routes, services, repositories, wiring, outbox, settings) or adds a subsystem, load the `service-architecture` skill and apply its review checklist.
-   - If it touches the LLM agent layer (orchestrator, sub-agents, route tools, prompts, entitlements), load `agent-orchestration-architecture` and apply its review checklist.
    - For an Alembic migration, check it against the migration section of the `add-feature` skill.
    - Judge against how the project actually does things. Report an architectural difference only when it causes a real problem, such as a security issue, a lost transaction or broken wiring.
 3. Look for, in priority order:
