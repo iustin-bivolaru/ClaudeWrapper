@@ -7,7 +7,6 @@ A cost-aware, security-hardened layer over Claude Code for client work in bankin
 |---|---|
 | **Orchestrator** (`remi:orchestrator`, Opus) | The main session. Sizes each task (XS/S/M/L) and uses as few workers as the work allows: none for XS (it edits directly), 1 for S, 2 for M, 3 only for L. Related subtasks go to the same worker. It creates the branch, delegates, routes review fixes back to the owning workers, then commits, pushes and opens the PR. |
 | **Worker** (`remi:worker`, Sonnet) | Does the implementation. Usually one; up to 3 run in parallel for large, independent work, each owning its own files, and each later fixes the review findings for its files. Never commits. |
-| **Explorer** (`remi:explorer`, Haiku, read-only) | Cheap search for broad sweeps across many files. It answers with file paths and line numbers, never whole files. |
 | **Reviewer** (`remi:reviewer`, Opus, read-only) | Is launched with only the base branch and no explanation, so it reviews the code cold. It applies the architecture skills' checklists when the diff touches those layers. Once that review is back, the orchestrator sends it your original request, quoted word for word, and it reports anything the change misses or adds that you didn't ask for. |
 | **House-style skills** | `python-service-style` (reST docstrings, descriptive names never single letters, `Annotated[..., Field()]` models and settings, `SecretStr`, `Decimal` for money, logging, errors, async I/O; preloaded in workers), `ponytail` (lazy senior dev: the smallest change that fully solves the task, reuse before stdlib before a new dependency, no unasked-for options or abstractions; adapted from DietrichGebert/ponytail, MIT; also preloaded in workers; the rest load on demand), `git-ship` (branch → commit → push → PR → merge, sandbox-safe git and gh calls, and the PR text: a plain, readable title, a body built from facts — what, why, how it was verified, risk and rollout — with no client data or attribution, kept current as the branch changes), `writing-worker-briefs` (preloaded in the orchestrator: every worker brief puts the task, owned files, critical constraints and acceptance criteria at the beginning and repeats them at the end, with detail in the middle). |
 | **Architecture skill** (loaded on demand by the orchestrator and reviewer) | `service-architecture` (package layout with one package per layer and one module per resource, layers, composition root, transactions, errors, outbox, plus a review checklist). |
@@ -69,7 +68,7 @@ A **read-only** report. It changes nothing in the project, and never opens secre
 - **Secrets:** secret files **by name only**. It flags any that are committed to git or not git-ignored, and a missing `.env.example`.
 - **Sandbox network:** package indexes from pyproject (`[tool.uv.index]`, Poetry sources) that the sandbox allowlist would block.
 
-At the end it offers to start a **plan-mode session**, with the findings filled in. In that session the orchestrator is the one that learns the codebase: up to 2 explorers list the code, then it reads the key files itself. It runs the real lint, typecheck and test commands, maps the risky modules (money, PII, auth, migrations), drafts a CLAUDE.md (≤ 200 lines, one per package in a multi-package repo) and proposes a `[tool.remi]` block if needed. The plan ends with the questions the code can't answer; you answer them before approving. After you approve, it ships the result on `chore/remi-onboarding` as a PR. Later sessions start from CLAUDE.md instead of re-reading the code, and workers get only their brief. To run it later:
+At the end it offers to start a **plan-mode session**, with the findings filled in. In that session the orchestrator is the one that learns the codebase: it lists the code with Grep/Glob, then reads the key files itself. It runs the real lint, typecheck and test commands, maps the risky modules (money, PII, auth, migrations), drafts a CLAUDE.md (≤ 200 lines, one per package in a multi-package repo) and proposes a `[tool.remi]` block if needed. The plan ends with the questions the code can't answer; you answer them before approving. After you approve, it ships the result on `chore/remi-onboarding` as a PR. Later sessions start from CLAUDE.md instead of re-reading the code, and workers get only their brief. To run it later:
 ```bash
 remi --plan "$(remi onboard --print-prompt)"
 ```
@@ -80,7 +79,7 @@ remi --plan "$(remi onboard --print-prompt)"
 
 | Mode | What the orchestrator does |
 |---|---|
-| **Plan** | Researches read-only (Grep/Read itself, and `remi:explorer` only for broad sweeps), asks only questions that change the design, and writes a plan: context and assumptions, size and worker map, per-subtask skills and test commands, risks (migrations, new `.env` keys, auth, money or PII paths), and the review and ship plan with Conventional Commit headers. It creates no branch, starts no workers and doesn't commit until you approve. `Plan` and the built-in `Explore` subagents are blocked: the orchestrator designs the plan itself, and Explore would run on Opus. |
+| **Plan** | Researches read-only (Grep/Read itself), asks only questions that change the design, and writes a plan: context and assumptions, size and worker map, per-subtask skills and test commands, risks (migrations, new `.env` keys, auth, money or PII paths), and the review and ship plan with Conventional Commit headers. It creates no branch, starts no workers and doesn't commit until you approve. `Plan` and the built-in `Explore` subagents are blocked: the orchestrator designs the plan itself, and Explore would run on Opus. |
 | **Accept edits / auto** | Runs the full pipeline without asking for each edit. M and L tasks still pause once, for you to approve the worker map before any worker starts. |
 | **Default** | The same pipeline, but you approve edits and some commands one by one. The orchestrator batches its actions to keep the prompts few. |
 
@@ -93,9 +92,8 @@ Start in a mode with `remi --plan`, `remi --permission-mode acceptEdits`, or `RE
 | Orchestrator | `REMI_ORCHESTRATOR_MODEL` = `opus` | `REMI_ORCHESTRATOR_EFFORT` = `medium` | also `--model` / `--effort` |
 | Worker | `REMI_WORKER_MODEL` = `sonnet` | `REMI_WORKER_EFFORT` = `medium` | |
 | Reviewer | `REMI_REVIEWER_MODEL` = `opus` | `REMI_REVIEWER_EFFORT` = `medium` | |
-| Explorer | `REMI_EXPLORER_MODEL` = `haiku` | `REMI_EXPLORER_EFFORT` = `low` | |
 
-Turn limits per agent: `REMI_WORKER_MAX_TURNS` (`50`), `REMI_REVIEWER_MAX_TURNS` (`25`) and `REMI_EXPLORER_MAX_TURNS` (`15`). The orchestrator has none: you drive the main session. Plus `REMI_MAX_WORKERS` (`3`), `REMI_PERMISSION_MODE` (starting mode), `REMI_NEW_REPO` (`ask`; see *New projects ship too*) and `REMI_NO_BANNER`. Effort is one of `low`, `medium`, `high`, `xhigh` or `max`. Precedence is **CLI flag > environment > config file > default**. To make a setting persistent, put it in `~/.config/remi/config`:
+Turn limits per agent: `REMI_WORKER_MAX_TURNS` (`50`), and `REMI_REVIEWER_MAX_TURNS` (`25`). The orchestrator has none: you drive the main session. Plus `REMI_MAX_WORKERS` (`3`), `REMI_PERMISSION_MODE` (starting mode), `REMI_NEW_REPO` (`ask`; see *New projects ship too*) and `REMI_NO_BANNER`. Effort is one of `low`, `medium`, `high`, `xhigh` or `max`. Precedence is **CLI flag > environment > config file > default**. To make a setting persistent, put it in `~/.config/remi/config`:
 
 ```ini
 # ~/.config/remi/config  (only REMI_* keys are read; the file is parsed, never executed)
@@ -213,9 +211,9 @@ Every `CLAUDE.md` / `CLAUDE.local.md`, at any depth, stays at or under **200 lin
 ## Cost controls
 
 - Opus plans and Sonnet does the typing: implementation is delegated to workers.
-- Only `remi:worker`, `remi:reviewer` and `remi:explorer` may run. A hook refuses everything else: `general-purpose`, `Plan` and the built-in `Explore`, which all inherit Opus, and any subagents a project defines in its `.claude/agents/`.
-- **Searching:** the orchestrator greps and reads targeted ranges itself, because starting any subagent costs about 20k tokens of context. Broad sweeps go to `remi:explorer`, which runs on Haiku. A measured search cost $0.0018, while the built-in Explore would run on Opus.
-- **Turn limits:** workers 50, reviewer 25, explorer 15. A worker that hits its limit stops with a partial result, and the orchestrator continues it with `SendMessage` (which gives it a fresh budget) or re-plans. Workers are told to wind down cleanly at about two-thirds of their budget.
+- Only `remi:worker` and `remi:reviewer` may run. A hook refuses everything else: `general-purpose`, `Plan` and the built-in `Explore`, which all inherit Opus, and any subagents a project defines in its `.claude/agents/`.
+- **Searching:** the orchestrator greps and reads targeted ranges itself, because starting any subagent costs about 20k tokens of context, and the built-in Explore would run on Opus. (A Haiku explorer agent was removed: it ran 2 times against about 30 runs each for workers and the reviewer.)
+- **Turn limits:** workers 50, reviewer 25. A worker that hits its limit stops with a partial result, and the orchestrator continues it with `SendMessage` (which gives it a fresh budget) or re-plans. Workers are told to wind down cleanly at about two-thirds of their budget.
 - **Task sizing.** XS changes are made directly by the orchestrator, with no worker and no Opus review unless the change is security-sensitive. S uses 1 worker, M 2, L 3. A new project from scratch is at least M: one worker for the core logic and one for the project shell and API, working in parallel against an interface fixed in the plan. `REMI_MAX_WORKERS` (3) is a hard ceiling, not a target. Related subtasks share one worker.
 - **Lean workers.** Only `python-service-style` and `ponytail` are preloaded. Other skills load when the brief asks for them. Briefs pass along facts the orchestrator already found, so workers don't search again.
 - **No duplicate checks.** Hooks lint and test when a worker or the main turn ends, never per edit. A passing run records the git tree hash of the working tree, so the pre-review and commit gates skip tests (and the whole gate) that already passed on the identical tree; any change, or a partially staged commit, reruns them. The commit gate always runs the secret scan, whatever the tree. The orchestrator doesn't rerun them in between. Slots are tracked per agent id, so a worker resumed for review fixes is never counted twice.
@@ -236,7 +234,7 @@ Every `CLAUDE.md` / `CLAUDE.local.md`, at any depth, stays at or under **200 lin
 bin/remi                         launcher
 settings/settings.json         permissions, sandbox, status line
 plugin/                        Claude Code plugin "remi"
-  agents/                      orchestrator, worker, reviewer, explorer
+  agents/                      orchestrator, worker, reviewer
   skills/                      house style: python-service-style, ponytail, git-ship, writing-worker-briefs
                                architecture: service-architecture
                                task: add-feature

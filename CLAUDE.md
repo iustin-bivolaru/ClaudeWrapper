@@ -22,13 +22,12 @@ Ruff: line length 120, py311, rules `E F I B UP S D` with Google docstrings (`D`
 
 ## Architecture
 
-**Launcher (`bin/remi`, bash).** Resolves `REMI_*` config (CLI flag > env > `~/.config/remi/config` > default) and validates it. Agent frontmatter is static, so it renders a **content-addressed copy of `plugin/`** into `~/.cache/remi/plugin-<cksum>` with the worker/reviewer/explorer `model`, `effort` and `maxTurns` filled in. Then it runs `claude --plugin-dir <copy> --settings settings/settings.json --agent remi:orchestrator`. In a folder with no git repository it offers to create one (plus a private GitHub repo) before the session, because the sandbox locks a `.git` made mid-session (`REMI_NEW_REPO`). It refuses to start unless `gh` is logged in to github.com with the `repo` scope (`gh api --include user`). It also translates `--plan` into `--permission-mode plan` and passes claude subcommands (`mcp`, `config`, …) straight through. Consequence: editing `plugin/` changes the hash, so the next `remi` launch picks it up automatically.
+**Launcher (`bin/remi`, bash).** Resolves `REMI_*` config (CLI flag > env > `~/.config/remi/config` > default) and validates it. Agent frontmatter is static, so it renders a **content-addressed copy of `plugin/`** into `~/.cache/remi/plugin-<cksum>` with the worker/reviewer `model`, `effort` and `maxTurns` filled in. Then it runs `claude --plugin-dir <copy> --settings settings/settings.json --agent remi:orchestrator`. In a folder with no git repository it offers to create one (plus a private GitHub repo) before the session, because the sandbox locks a `.git` made mid-session (`REMI_NEW_REPO`). It refuses to start unless `gh` is logged in to github.com with the `repo` scope (`gh api --include user`). It also translates `--plan` into `--permission-mode plan` and passes claude subcommands (`mcp`, `config`, …) straight through. Consequence: editing `plugin/` changes the hash, so the next `remi` launch picks it up automatically.
 
 **Agents (`plugin/agents/*.md`).**
 - `orchestrator`: the main session (Opus). It sizes tasks XS/S/M/L, delegates, routes review fixes back to the owning worker via `SendMessage`, and ships.
 - `worker`: Sonnet, 1–3 in parallel, never commits.
 - `reviewer`: Opus, read-only, launched with only the base branch so it reviews the code cold; then sent the user's verbatim request (SendMessage) to check the change against it.
-- `explorer`: Haiku, read-only search.
 
 The workflow lives in `orchestrator.md`. The hooks enforce the parts that must not depend on the prompt.
 
@@ -44,7 +43,7 @@ These are aimed at the *target* projects remi runs in, not at this repo.
 | Module | Called on | Role |
 |---|---|---|
 | `guard.py` | `pre-tool`: Read/Edit/Write/Grep/Glob/Bash | secret paths, env dumps, dangerous git, protected branches (except a new repo's empty first commit and its `gh repo create --push`), no new repository mid-session (`git init`/clones; the launcher bootstraps it), `gh`/`git push/pull/fetch` only standalone (else sandboxed), Conventional Commits (via `conventional_commits.py`), no Claude attribution |
-| `agent_policy.py` | `pre-tool` Agent/SendMessage, `subagent-start`, `prompt` | only `remi:worker/reviewer/explorer` allowed; worker slot cap `REMI_MAX_WORKERS` tracked per agent id with `fcntl` locks; reviewer launched blind (one base-branch line), then sent the user's messages verbatim in `<request>` blocks (recorded by `prompt`); a new reviewer makes that request check due until sent |
+| `agent_policy.py` | `pre-tool` Agent/SendMessage, `subagent-start`, `prompt` | only `remi:worker/reviewer` allowed; worker slot cap `REMI_MAX_WORKERS` tracked per agent id with `fcntl` locks; reviewer launched blind (one base-branch line), then sent the user's messages verbatim in `<request>` blocks (recorded by `prompt`); a new reviewer makes that request check due until sent |
 | `quality.py` | `stop`, `subagent-stop`, `pre-tool` Agent (review) and Bash (commit) | nothing per edit (`pre-tool` only records `.py` paths), main-session gate at turn end (only if it edited Python), per-worker gate on stop, pre-review gate (all workers done, whole change green), commit gate (request check sent, secret/IBAN/Luhn scan, naming, format, lint, tests) |
 | `merge_gate.py` | `pre-tool` Bash; `record_review` when a reviewer stops | `gh pr merge` only after the latest reviewer's `VERDICT: APPROVE` + `REQUEST: MATCHES`, HEAD equal to the reviewed snapshot (path → blob id) except files equal to the base branch (rebase/merge of `main`), `--match-head-commit` = HEAD, never `--admin` |
 | `claude_md.py` | `pre-tool` Write/Edit/MultiEdit/Bash | CLAUDE.md ≤ `REMI_CLAUDE_MD_MAX_LINES` (200), computed on the resulting file |
