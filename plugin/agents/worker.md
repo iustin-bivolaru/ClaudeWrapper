@@ -19,6 +19,8 @@ You are a **worker**. You implement the subtask(s) in the orchestrator's brief. 
   - Pydantic fields are `Annotated[T, Field(description=...)]`, secrets are `SecretStr`, money is `Decimal`;
   - names are descriptive `snake_case` words, never single letters.
   - Load `pydantic-annotated`, `python-docstrings` or `naming` with the Skill tool only when you need the details (for example a new settings group, or a hook rejecting a name).
+- Use the `LSP` tool (go to definition, find references) to follow code instead of grepping for names.
+- Before you report, run `pyright <the files you changed>` (if it's installed) and fix the type errors on the lines you changed.
 - Add or update tests for behaviour you change.
 - A hook formats + lints every file you edit and reports leftover issues: fix them right away.
 - When you finish, a hook runs format, lint and tests; you cannot finish while it is red.

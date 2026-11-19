@@ -175,10 +175,12 @@ fi
 # --- the remi hamster: monochrome, interactive sessions only ------------------------------
 if [ -t 1 ] && [ "$is_print_mode" = false ] && [ -z "${REMI_NO_BANNER:-}" ]; then
   branch="$(git symbolic-ref --short -q HEAD 2>/dev/null || echo -)"
+  pyright_hint=""
+  command -v pyright-langserver >/dev/null || pyright_hint=" · pyright missing: uv tool install pyright"
   cat <<BANNER
  ▗█▖ ▗█▖   remi
  ▟▀███▀▙   orchestrator ${orchestrator_model}/${orchestrator_effort} · workers ${REMI_WORKER_MODEL}/${REMI_WORKER_EFFORT} 1–${REMI_MAX_WORKERS} by size · reviewer ${REMI_REVIEWER_MODEL}/${REMI_REVIEWER_EFFORT} · explorer ${REMI_EXPLORER_MODEL}
- ▜█████▛   sandbox on · secrets guarded · branch ${branch}
+ ▜█████▛   sandbox on · secrets guarded · branch ${branch}${pyright_hint}
   ▘▘ ▝▝    ${start_mode:+mode ${start_mode} · }shift+tab cycles modes (plan · accept edits · default)
 BANNER
 fi
