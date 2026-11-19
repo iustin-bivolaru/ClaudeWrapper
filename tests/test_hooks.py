@@ -1073,6 +1073,18 @@ def test_onboard_prompt_carries_findings(onboarding_repo):
     assert "Risk map" in prompt and "questions the code can't answer" in prompt
 
 
+def test_onboard_sees_git_ignored_claude_md(repo):
+    (repo / "CLAUDE.md").write_text(lines_of(10))
+    (repo / ".git" / "info" / "exclude").write_text("/CLAUDE.md\n")
+    report = run_onboard(repo, "--no-prompt").stdout
+    assert "no CLAUDE.md yet" not in report
+    assert "CLAUDE.md: 10 lines" in report and "CLAUDE.md is git-ignored" in report
+
+
+def test_onboard_without_claude_md(repo):
+    assert "no CLAUDE.md yet" in run_onboard(repo, "--no-prompt").stdout
+
+
 def test_onboard_outside_git(tmp_path):
     result = run_onboard(tmp_path)
     assert result.returncode == 2
