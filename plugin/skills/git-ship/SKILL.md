@@ -10,7 +10,7 @@ You write the text (commit message, PR title, PR body); `remi ship` does the mec
 ## Sandbox rules for git and gh
 - Run every `gh` command, `git push`, `git pull` and `git fetch` **on its own**: no `&&`, no pipe, no `cd x &&`. Chained, they run in the sandbox, can't reach credentials and look logged out. Check `gh auth status` alone before asking the user for `! gh auth login`.
 - No `git push -u` (it writes `.git/config`).
-- Never create a repository in the session (`git init`, clones). With no repository, tell the user to exit and rerun `remi` in that folder; the launcher creates it.
+- Never create a repository with `git init` or a clone. For a new project run `remi new <folder>` as the whole command (folder, repository and private GitHub repo, outside the sandbox), then `cd <folder>`.
 
 ## New repository without commits or remote
 Each command as its own call:
