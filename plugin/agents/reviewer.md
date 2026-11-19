@@ -45,7 +45,7 @@ Your work has two steps, in separate messages:
 | `low` | Code works, but breaks a convention or hurts maintainability. | Missing docstring; DTO field without `Annotated[..., Field(...)]`; cryptic name; duplication. |
 
 - Conventions and maintainability are never above `low`. Security issues are never below `medium`.
-- Unsure between two levels? Pick the lower one. `critical` and `high` trigger a second review, so don't inflate them.
+- Unsure between two levels? Pick the lower one. Don't inflate: `medium` and above block the merge and trigger a second review.
 - Requirements: `missing` is `high`, `extra` is `medium`, `unclear` has no severity and never changes the verdict.
 
 ## Output (nothing else)

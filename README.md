@@ -136,7 +136,7 @@ you: task ─▶ orchestrator: feature branch
               └─ code findings ─▶ owning worker(s) fix (SendMessage)            │
                           ▼                                                     │
               request findings ─▶ orchestrator re-plans or asks you             │
-                          critical/high ⇒ one more review (both steps)          │
+                          any fixes ⇒ one more review (both steps)              │
                           ▼                                                     ▼
               commit gate (hook): request check sent · secret scan · naming ·
                                   format · lint · tests
