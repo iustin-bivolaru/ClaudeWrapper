@@ -28,6 +28,7 @@ from agent_policy import REVIEWERS_DIRECTORY, _slot_name  # noqa: E402
 REVIEW_STATE_FILE = "review-state.json"
 VERDICT_PATTERN = re.compile(r"VERDICT:\s*(APPROVE|CHANGES_REQUESTED)")
 REQUEST_PATTERN = re.compile(r"REQUEST:\s*(MATCHES|GAPS)")
+HANDBACK_TOOL = "SubagentHandback"
 MERGE_COMMAND = re.compile(r"\bgh\s+pr\s+merge\b")
 MAX_LISTED_PATHS = 5
 BASE_REFS = ("origin/HEAD", "origin/main", "origin/master", "main", "master")
@@ -61,31 +62,51 @@ def _last_message(payload: dict[str, Any]) -> str:
     Args:
         payload: SubagentStop payload.
 
+    A subagent may hand its report back through a ``SubagentHandback`` tool call instead of a
+    final text message, so the transcript's last report is read too: the last assistant text or
+    handback message, whichever came later.
+
     Returns:
-        ``last_assistant_message``, or the last assistant text in the agent's transcript, or "".
+        ``last_assistant_message`` and the last report in the agent's transcript, joined; or "".
     """
     message = payload.get("last_assistant_message")
-    if isinstance(message, str) and message:
-        return message
+    message = message if isinstance(message, str) else ""
     transcript = payload.get("agent_transcript_path")
     if not transcript:
-        return ""
-    last_text = ""
+        return message
+    last_report = ""
     try:
         lines = Path(str(transcript)).read_text().splitlines()
     except OSError:
-        return ""
+        return message
     for line in lines:
         try:
             entry = json.loads(line)
         except ValueError:
             continue
         content = (entry.get("message") or {}).get("content") if entry.get("type") == "assistant" else None
-        if isinstance(content, list):
-            texts = [part.get("text", "") for part in content if isinstance(part, dict) and part.get("type") == "text"]
-            if any(texts):
-                last_text = "\n".join(texts)
-    return last_text
+        if not isinstance(content, list):
+            continue
+        reports = [_report_text(part) for part in content if isinstance(part, dict)]
+        if any(reports):
+            last_report = "\n".join(report for report in reports if report)
+    return "\n".join(text for text in (message, last_report) if text)
+
+
+def _report_text(part: dict[str, Any]) -> str:
+    """Return the report text carried by one assistant content part.
+
+    Args:
+        part: A content part from an assistant transcript entry.
+
+    Returns:
+        The text of a text part or of a ``SubagentHandback`` call, else "".
+    """
+    if part.get("type") == "text":
+        return str(part.get("text") or "")
+    if part.get("type") == "tool_use" and part.get("name") == HANDBACK_TOOL:
+        return str((part.get("input") or {}).get("message") or "")
+    return ""
 
 
 def working_tree_snapshot(root: Path) -> tuple[dict[str, str], list[str]]:

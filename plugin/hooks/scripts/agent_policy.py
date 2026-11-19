@@ -53,6 +53,9 @@ ALLOWED_AGENT_TYPES = frozenset({"remi:worker", "remi:reviewer", "remi:explorer"
 
 REQUEST_BLOCK = re.compile(r"<request>(.*?)</request>", re.DOTALL)
 REQUESTS_FILE = "user-requests.json"
+# Prompts the harness submits for the user: subagent hand-backs and background-task events.
+HARNESS_PROMPT = re.compile(r"^(?:<(?:agent-message|task-notification)\b|Another Claude session sent a message)")
+QUESTION_TOOL = "AskUserQuestion"
 REVIEWERS_DIRECTORY = "reviewers"
 REQUEST_CHECK_DUE_FILE = "request-check-due"
 MAX_RECORDED_REQUESTS = 50
@@ -163,6 +166,41 @@ def _recorded_requests(payload: dict[str, Any]) -> list[str]:
     return [str(message) for message in recorded] if isinstance(recorded, list) else []
 
 
+def _question_answers(payload: dict[str, Any]) -> list[str]:
+    """Return the user's AskUserQuestion answers from the main session's transcript.
+
+    The answers reach the session as tool results, not prompts, so the prompt hook never records them.
+
+    Args:
+        payload: Hook payload carrying ``transcript_path``.
+
+    Returns:
+        The text of every AskUserQuestion result, oldest first; empty when none or unreadable.
+    """
+    try:
+        lines = Path(str(payload.get("transcript_path") or "")).read_text().splitlines()
+    except OSError:
+        return []
+    question_ids: set[str] = set()
+    answers = []
+    for line in lines:
+        try:
+            content = (json.loads(line).get("message") or {}).get("content")
+        except (ValueError, AttributeError):
+            continue
+        for part in content if isinstance(content, list) else []:
+            if not isinstance(part, dict):
+                continue
+            if part.get("type") == "tool_use" and part.get("name") == QUESTION_TOOL:
+                question_ids.add(str(part.get("id")))
+            elif part.get("type") == "tool_result" and str(part.get("tool_use_id")) in question_ids:
+                result = part.get("content")
+                if isinstance(result, list):
+                    result = "\n".join(str(item.get("text", "")) for item in result if isinstance(item, dict))
+                answers.append(str(result or ""))
+    return answers
+
+
 def _outside_requests(text: str) -> list[str]:
     """Return the non-empty lines of a prompt outside its ``<request>`` blocks.
 
@@ -258,7 +296,7 @@ def on_message(payload: dict[str, Any]) -> int:
             'the request check carries no context either: one instruction line ("Check the change against the '
             "user's request.\") plus the user's messages in <request>...</request>. No plan, no reasons."
         )
-    recorded = [_normalise(message) for message in _recorded_requests(payload)]
+    recorded = [_normalise(message) for message in _recorded_requests(payload) + _question_answers(payload)]
     if not recorded:
         block("no user message is recorded for this session, so there is no request to check against.")
     for quote in quotes:
@@ -283,7 +321,7 @@ def on_prompt(payload: dict[str, Any]) -> int:
         Always 0: recording never blocks the user.
     """
     message = str(payload.get("prompt") or "").strip()
-    if not message:
+    if not message or HARNESS_PROMPT.match(message):
         return ALLOW
     root = state_dir(payload)
     with open(root / "requests.lock", "w") as lock_file:
