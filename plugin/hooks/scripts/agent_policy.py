@@ -48,8 +48,8 @@ REDIRECT = {
     "general-purpose": "remi:worker",
     "claude": "remi:worker",
 }
-ALLOWED_AGENT_TYPES = frozenset({"remi:worker", "remi:reviewer", "remi:explorer"})
-"""Only the wrapper's own agents (the explorer runs on Haiku; the built-in Explore inherits the expensive session model) may run; project-defined agents are refused."""
+ALLOWED_AGENT_TYPES = frozenset({"remi:worker", "remi:reviewer"})
+"""Only the wrapper's own agents may run; built-in ones inherit the expensive session model, project-defined ones are refused."""
 
 REQUEST_BLOCK = re.compile(r"<request>(.*?)</request>", re.DOTALL)
 REQUESTS_FILE = "user-requests.json"
@@ -344,25 +344,24 @@ def on_pre(payload: dict[str, Any]) -> int:
     if agent_type in REDIRECT:
         block(
             f"'{agent_type}' runs on the expensive orchestrator model. Use "
-            f"subagent_type='{REDIRECT[agent_type]}' (Sonnet) for implementation, "
-            "'remi:explorer' (Haiku) for broad searches, or 'remi:reviewer' for review."
+            f"subagent_type='{REDIRECT[agent_type]}' (Sonnet) for implementation or 'remi:reviewer' for review. "
+            "Search with Grep and Read yourself."
         )
     if agent_type == "Plan":
         block(
             "in remi the orchestrator designs the plan itself, and 'Plan' subagents would run on the expensive "
-            "orchestrator model. Research with Grep/Read yourself, or remi:explorer for broad sweeps, then write the plan file and call "
+            "orchestrator model. Research with Grep/Read yourself, then write the plan file and call "
             "ExitPlanMode."
         )
     if agent_type == "Explore":
         block(
-            "the built-in 'Explore' runs on the session's model (Opus), not a cheap one. For a targeted lookup, use "
-            "Grep and Read yourself: starting any subagent costs about 20k tokens. For a broad sweep across many "
-            "directories, use subagent_type='remi:explorer' (Haiku, read-only)."
+            "the built-in 'Explore' runs on the session's model (Opus). Use Grep and Read yourself, with "
+            "offset/limit for large files: starting any subagent costs about 20k tokens."
         )
     if agent_type not in ALLOWED_AGENT_TYPES:
         block(
             f"subagent '{agent_type}' is not part of remi. Use only remi:worker (implementation), "
-            "remi:reviewer (review) or remi:explorer (broad search)."
+            "remi:reviewer (review)."
         )
     if agent_type == "remi:reviewer":
         _check_reviewer_launch(payload)
