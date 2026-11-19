@@ -69,7 +69,7 @@ A **read-only** report. It changes nothing in the project, and never opens secre
 - **Secrets:** secret files **by name only**. It flags any that are committed to git or not git-ignored, and a missing `.env.example`.
 - **Sandbox network:** package indexes from pyproject (`[tool.uv.index]`, Poetry sources) that the sandbox allowlist would block.
 
-At the end it offers to start a **plan-mode session**, with the findings filled in. That session maps the architecture, confirms the commands, drafts a CLAUDE.md (≤ 200 lines) and proposes a `[tool.remi]` block if needed. After you approve, it ships them on `chore/remi-onboarding` as a PR. To run it later:
+At the end it offers to start a **plan-mode session**, with the findings filled in. In that session the orchestrator is the one that learns the codebase: up to 2 explorers list the code, then it reads the key files itself. It runs the real lint, typecheck and test commands, maps the risky modules (money, PII, auth, migrations), drafts a CLAUDE.md (≤ 200 lines, one per package in a multi-package repo) and proposes a `[tool.remi]` block if needed. The plan ends with the questions the code can't answer; you answer them before approving. After you approve, it ships the result on `chore/remi-onboarding` as a PR. Later sessions start from CLAUDE.md instead of re-reading the code, and workers get only their brief. To run it later:
 ```bash
 remi --plan "$(remi onboard --print-prompt)"
 ```

@@ -27,7 +27,7 @@ Your work has two steps, in separate messages:
    - **Correctness**: logic errors, unhandled edge cases, races, wrong error handling, broken contracts.
    - **Tests**: changed behaviour without tests, tests that don't assert anything meaningful.
    - **Conventions**: public functions/methods/classes without docstrings (reST `:param:`/`:returns:`/`:raises:` house style unless the repo uses another); DTOs/Settings not using `Annotated[..., Field(...)]`; secrets not `SecretStr`; single-letter or cryptic names instead of descriptive `snake_case` words.
-   - **Maintainability**: duplication, needless complexity — only when it matters.
+   - **Maintainability**: duplication, needless complexity — only when it matters. Also a CLAUDE.md that the change makes wrong (a command, module or path it names was moved or renamed).
 4. Verify each finding against the code before reporting it. Report it only if you can point to the line and name the input or path that triggers it; otherwise drop it. No style nitpicks a formatter would fix.
 5. **Request check** (only in the later message with `<request>` blocks). Compare the request with what the diff actually does:
    - **missing**: something the request asks for that the diff doesn't do, or does differently (a per-transaction limit when a daily one was asked for, one endpoint of two, a dropped exception).

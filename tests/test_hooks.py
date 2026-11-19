@@ -1070,6 +1070,7 @@ def test_onboard_prompt_carries_findings(onboarding_repo):
     assert prompt.startswith("Onboard remi to this repository.")
     assert "CLAUDE.md: 250 lines" in prompt
     assert "service-architecture" in prompt and "chore/remi-onboarding" in prompt
+    assert "Risk map" in prompt and "questions the code can't answer" in prompt
 
 
 def test_onboard_outside_git(tmp_path):
