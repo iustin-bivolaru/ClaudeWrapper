@@ -1305,13 +1305,42 @@ def test_remi_new_refuses_a_folder_inside_a_repository(tmp_path, repo):
     assert "CLAUDE STARTED" not in result.stdout
 
 
-def test_launcher_points_a_projects_folder_to_remi_new(tmp_path):
+def test_launcher_leaves_a_projects_folder_alone(tmp_path):
     projects = tmp_path / "projects"
     (projects / "old-project" / ".git").mkdir(parents=True)
     result = run_launcher(tmp_path, GH_READY, cwd=projects)
     assert result.returncode == 0, result.stderr
-    assert "remi new <folder>" in result.stderr
+    assert "holds other projects" in result.stderr
     assert not (projects / ".git").exists()
+
+
+@pytest.mark.parametrize(("choice", "remote"), [("ask", True), ("github", True), ("off", True), ("local", False)])
+def test_remi_new_in_a_session_bootstraps_without_starting_claude(tmp_path, choice, remote):
+    result = run_launcher(tmp_path, GH_READY, args=("new", "bank-api"), CLAUDECODE="1", REMI_NEW_REPO=choice)
+    assert result.returncode == 0, result.stderr
+    assert "CLAUDE STARTED" not in result.stdout
+    assert "cd bank-api" in result.stdout
+    project = tmp_path / "bank-api"
+    log = subprocess.run(["git", "log", "--format=%s"], cwd=project, capture_output=True, text=True)
+    assert log.stdout.strip() == "chore: initial commit"
+    gh_log = tmp_path / "gh.log"
+    assert ("gh repo create bank-api --private" in gh_log.read_text()) if remote else not gh_log.exists()
+
+
+@pytest.mark.parametrize(
+    "args", [("new", "a/b"), ("new", "../x"), ("new", "x", "build it"), ("new", ".hidden"), ("new", "/tmp/x")]
+)
+def test_remi_new_in_a_session_takes_one_plain_folder_name(tmp_path, args):
+    result = run_launcher(tmp_path, GH_READY, args=args, CLAUDECODE="1")
+    assert result.returncode == 2
+    assert "one folder name" in result.stderr
+    assert not any(path.name == ".git" for path in tmp_path.rglob(".git"))
+
+
+def test_remi_new_in_a_session_refuses_a_folder_inside_a_repository(tmp_path, repo):
+    result = run_launcher(tmp_path, GH_READY, cwd=repo, args=("new", "nested"), CLAUDECODE="1")
+    assert result.returncode == 2
+    assert "inside the git repository" in result.stderr
 
 
 def test_launcher_rejects_unknown_new_repo_choice(tmp_path):
@@ -1796,6 +1825,18 @@ def test_ship_refuses_a_merged_pr(repo, tmp_path):
 )
 def test_guard_allows_remi_ship_only_bare(repo, command):
     assert run_hook("pre-tool", tool("Bash", cwd=repo, command=command)).returncode == 2, command
+
+
+@pytest.mark.parametrize("command", ["cd ~/projects && remi new bank-api", "remi new $(whoami)", "remi new x; ls"])
+def test_guard_allows_remi_new_only_bare(repo, command):
+    result = run_hook("pre-tool", tool("Bash", cwd=repo, command=command))
+    assert result.returncode == 2, command
+    assert "remi new" in result.stderr
+
+
+def test_guard_allows_plain_remi_new(tmp_path):
+    result = run_hook("pre-tool", tool("Bash", cwd=tmp_path, command="remi new bank-api"))
+    assert result.returncode == 0, result.stderr
 
 
 def test_guard_allows_plain_remi_ship(repo):

@@ -232,31 +232,33 @@ def check_standalone(command: str) -> None:
 
 
 def check_ship(command: str) -> None:
-    """Allow ``remi ship`` only as a bare, standalone command.
+    """Allow ``remi ship`` and ``remi new`` only as bare, standalone commands.
 
-    It runs outside the sandbox and finds the session's review state from its
-    environment, so it may not be chained, run with ``VAR=value`` in front, or
-    expand anything: ``$(...)`` in a title would also run unsandboxed.
+    Both run outside the sandbox (``remi ship`` also finds the session's review state
+    from its environment), so they may not be chained, run with ``VAR=value`` in front,
+    or expand anything: ``$(...)`` in a title would also run unsandboxed.
 
     Args:
         command: Raw shell command line.
     """
-    if not re.search(r"\bremi\s+ship\b", command):
+    found = re.search(r"\bremi\s+(ship|new)\b", command)
+    if not found:
         return
-    if not re.match(r"\s*remi\s+ship(\s|$)", command) or SHIP_FORBIDDEN.search(command):
+    subcommand = found.group(1)
+    if not re.match(rf"\s*remi\s+{subcommand}(\s|$)", command) or SHIP_FORBIDDEN.search(command):
         block(
-            "run `remi ship` as the whole command: nothing in front (no `cd x &&`, no `VAR=value`), and no "
+            f"run `remi {subcommand}` as the whole command: nothing in front (no `cd x &&`, no `VAR=value`), and no "
             "`$`, backticks, `;`, `&`, `|`, `<`, `>` or newlines anywhere in it, not even inside quotes. Keep the "
             "title and messages plain and put details in the body file. `cd` in a separate call first."
         )
 
 
 def check_new_repository(command: str) -> None:
-    """Refuse creating a repository inside the session.
+    """Refuse creating a repository with a sandboxed command.
 
-    Claude Code's sandbox protects only repositories that exist when the session starts;
-    a ``.git`` made later is locked against every sandboxed write, so the first commit
-    fails. The launcher creates the repository before the session instead.
+    A ``.git`` that a sandboxed command creates is locked against every sandboxed write,
+    so the first commit fails. ``remi new <folder>`` creates it outside the sandbox
+    instead; the session can then commit in it normally.
 
     Args:
         command: Raw shell command line.
@@ -270,10 +272,10 @@ def check_new_repository(command: str) -> None:
         if not creates:
             continue
         block(
-            "a repository can't be created inside the session: the sandbox locks a .git made after startup, so "
-            'commits would fail. Ask the user to exit and run `remi new <folder> "<request>"` (a new project) or `remi` '
-            "in the project folder; the launcher creates the repository (git init, first commit, private GitHub repo) "
-            "before the session starts."
+            "don't create a repository with git or gh: the sandbox locks a .git that a sandboxed command makes, so "
+            "commits would fail. For a new project run `remi new <folder>` as the whole command (it creates the "
+            "folder, the repository and the private GitHub repo outside the sandbox), then `cd <folder>`. To work on "
+            "an existing remote repository, ask the user to clone it and start remi there."
         )
 
 

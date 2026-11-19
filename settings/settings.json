@@ -48,7 +48,8 @@
       "Bash(git remote add *)",
       "Bash(gh auth status)",
       "Bash(gh auth status *)",
-      "Bash(remi ship *)"
+      "Bash(remi ship *)",
+      "Bash(remi new *)"
     ],
     "ask": [
       "WebFetch"
@@ -112,7 +113,8 @@
       "git pull *",
       "git fetch *",
       "gh *",
-      "remi ship *"
+      "remi ship *",
+      "remi new *"
     ],
     "filesystem": {
       "denyRead": [

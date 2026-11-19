@@ -4,6 +4,8 @@
 # skills, hooks) and the hardened sandbox settings.
 # Every claude flag and subcommand works: `remi -c`, `remi -p "..."`, `remi mcp list`.
 # `remi new <folder> ["request"]` starts a new project: creates the folder, then runs remi in it.
+# Inside a session, `remi new <folder>` only creates the folder, its repository and the GitHub
+# remote (it runs outside the sandbox, like `remi ship`); the session then works there.
 #
 # Model and effort per role. Precedence: CLI flag > environment > config file > default.
 #   REMI_ORCHESTRATOR_MODEL  (opus)    REMI_ORCHESTRATOR_EFFORT (medium)   also: --model / --effort
@@ -41,6 +43,15 @@ case "${1:-}" in
     shift
     if [ -z "${1:-}" ] || [[ $1 == -* ]]; then
       echo "remi: usage: remi new <folder> [\"request\"] [claude flags]" >&2; exit 2
+    fi
+    if [ -n "${CLAUDECODE:-}" ]; then
+      # In a session the sandbox lets the session write only below its launch folder, and the
+      # orchestrator continues in the same session: one plain folder name, nothing else.
+      in_session_new=true
+      if [ $# -ne 1 ] || [[ ! $1 =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
+        echo "remi: in a session, run: remi new <folder> (one folder name: letters, digits, . _ -; no path, no request)" >&2
+        exit 2
+      fi
     fi
     mkdir -p -- "$1"
     cd -- "$1"
@@ -190,6 +201,11 @@ fi
 # Claude Code's sandbox only protects a repository that exists when the session starts: a
 # .git made mid-session is locked against every sandboxed write, so commits fail. The
 # launcher runs as the user, outside the sandbox, so it bootstraps the repo here instead.
+# Inside a session, `remi new` is the explicit request for a repository, so it never asks.
+if [ "${in_session_new:-false}" = true ]; then
+  [ "$REMI_NEW_REPO" = local ] || REMI_NEW_REPO=github
+  is_print_mode=false
+fi
 if [ "$is_print_mode" = false ] && [ "$REMI_NEW_REPO" != off ] && [ "$PWD" != "$HOME" ] && [ "$PWD" != / ] \
    && ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   project_folder="${PWD##*/}"
@@ -197,7 +213,7 @@ if [ "$is_print_mode" = false ] && [ "$REMI_NEW_REPO" != off ] && [ "$PWD" != "$
   new_repo_choice="$REMI_NEW_REPO"
   # A folder whose subfolders are repositories holds projects; it isn't one. Point to `remi new`.
   if [ "$new_repo_choice" = ask ] && [ -n "$(find . -mindepth 2 -maxdepth 2 -name .git -print -quit 2>/dev/null)" ]; then
-    echo "remi: '$project_folder' holds other projects and isn't one itself. To start a new project, exit and run: remi new <folder> [\"request\"]" >&2
+    echo "remi: '$project_folder' holds other projects and isn't one itself. Ask remi for a new project and it creates the folder and its repository here." >&2
     new_repo_choice=off
   fi
   if [ "$new_repo_choice" = ask ]; then
@@ -231,6 +247,12 @@ if [ "$is_print_mode" = false ] && [ "$REMI_NEW_REPO" != off ] && [ "$PWD" != "$
       fi
     fi
   fi
+fi
+
+if [ "${in_session_new:-false}" = true ]; then
+  git rev-parse --is-inside-work-tree >/dev/null 2>&1 || { echo "remi: no repository was created in '$PWD'." >&2; exit 1; }
+  echo "remi: the project is ready at $PWD. Next, as its own command: cd ${PWD##*/}"
+  exit 0
 fi
 
 # --- the remi hamster: monochrome, interactive sessions only ------------------------------
