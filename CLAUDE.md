@@ -51,7 +51,7 @@ These are aimed at the *target* projects remi runs in, not at this repo.
 | `scope.py`, `naming.py` | helpers | legacy-safe: existing files are checked only on changed lines; no single-letter names |
 | `onboard.py`, `statusline.py` | launcher / status line | not hooks |
 
-Hook state (worker slots, edited files) lives per session under `REMI_STATE_DIR` (default `$TMPDIR/remi/<session_id>`). `quality.py` finds target-project tools in this order: `.venv/bin`, `uv run`, `PATH`, `uvx ruff`. A `[tool.remi]` table in the target's pyproject overrides them.
+Gates skip what already passed on the same working tree (`tree_fingerprint`: `git add -A` into a scratch index, then `write-tree`; log in `green-trees.txt`). Hook state (worker slots, edited files, green trees) lives per session under `REMI_STATE_DIR` (default `$TMPDIR/remi/<session_id>`). `quality.py` finds target-project tools in this order: `.venv/bin`, `uv run`, `PATH`, `uvx ruff`. A `[tool.remi]` table in the target's pyproject overrides them.
 
 **Settings (`settings/settings.json`).** Enables the official `pyright-lsp` plugin (needs `pyright-langserver` on PATH; `install.sh` installs it). Its diagnostics reach only the main session, so workers run `pyright` on their files themselves. The settings also hold the permission deny rules for secret files, the OS sandbox (secret `denyRead`, network allowlist, no unsandboxed escape) and empty attribution. `SECRET_PATH_PATTERNS` in `_common.py` is mirrored here, so change both together.
 

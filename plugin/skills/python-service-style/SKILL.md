@@ -44,28 +44,9 @@ Keep these folders separate. Find the project's names for them.
 - A replaceable external boundary is an `ABC` with `@abstractmethod`s plus one concrete implementation.
 - Long-lived clients are created once at startup and closed (`aclose()`) at shutdown.
 
-## Docstrings: reST, plain English
+## Docstrings
 
-Every public class, method and function has one. Write short, concrete sentences that say what the code does for the caller and the edge cases. Don't restate the type hints.
-
-```python
-async def get_version(self, user_id: UUID, version: int) -> VersionModel:
-    """
-    Return one version of a user's document.
-
-    :param user_id: The user's id.
-    :param version: The version number.
-    :returns: That version.
-    :raises AppError: NOT_FOUND if that version does not exist,
-        DATABASE_ERROR if the query fails.
-    """
-```
-
-- Use the multi-line form with the opening `"""` on its own line.
-- The `__init__` docstring holds only `:param:` lines.
-- Each `:raises:` names which error codes the call can raise, and when.
-- Class docstrings state the invariants and the lifecycle ("Create it once at startup and close it with aclose() at shutdown.").
-- Write a *why* that isn't obvious in the docstring, not in a scattered comment.
+Every public class, method and function gets a multi-line reST docstring (`:param:`, `:returns:`, `:raises AppError:` with the error codes and when). Plain English, no restating the type hints. Load `python-docstrings` for the full rules and an example.
 
 ## Logging
 
