@@ -1,6 +1,6 @@
 ---
 name: python-service-style
-description: House style for async Python backend services (FastAPI, SQLAlchemy 2.x, Pydantic, LangGraph agents) — module layout, typing, naming, reST docstrings, logging, a single application error type, dependency injection, async I/O. Load before writing or changing any Python in such a service, including small fixes. The task skills (add-api-endpoint, add-sub-agent, add-agent-tool, add-outbox-job, add-integration, add-migration, add-setting) build on this one.
+description: House style for async Python backend services (FastAPI, SQLAlchemy 2.x, Pydantic, LangGraph agents) — module layout, typing, naming, reST docstrings, logging, a single application error type, dependency injection, async I/O. Load before writing or changing any Python in such a service, including small fixes. The task skill add-feature builds on this one.
 ---
 
 # Python service style

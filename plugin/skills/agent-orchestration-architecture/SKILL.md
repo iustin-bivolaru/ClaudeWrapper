@@ -1,6 +1,6 @@
 ---
 name: agent-orchestration-architecture
-description: The reference architecture for a multi-agent LLM chat backend — an orchestrator that routes each turn to specialised sub-agents via route tools, hand-off recording, invokers, a uniform streamed event contract, per-role entitlements, form events that bypass routing, per-agent threads and checkpointing, tool isolation and prompt-injection boundaries. Use when designing or reviewing the agent layer, deciding whether something should be a new agent, a new tool, or plain service code, or debugging routing and streaming across agents. For the concrete steps use add-sub-agent / add-agent-tool.
+description: The reference architecture for a multi-agent LLM chat backend — an orchestrator that routes each turn to specialised sub-agents via route tools, hand-off recording, invokers, a uniform streamed event contract, per-role entitlements, form events that bypass routing, per-agent threads and checkpointing, tool isolation and prompt-injection boundaries. Use when designing or reviewing the agent layer, deciding whether something should be a new agent, a new tool, or plain service code, or debugging routing and streaming across agents. For the concrete steps use add-feature.
 ---
 
 # Agent orchestration architecture

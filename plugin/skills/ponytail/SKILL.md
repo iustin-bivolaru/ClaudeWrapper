@@ -37,4 +37,4 @@ Never cut: validation at trust boundaries, error handling that prevents data los
 
 ## In remi
 
-The house rules are not boilerplate. Docstrings on public code (`python-docstrings`), `Annotated[..., Field()]` and `Decimal` for money (`pydantic-annotated`), descriptive names (`naming`), the layering in `service-architecture`, and the pieces an `add-*` checklist lists all stay. Ponytail decides how much code to write, not whether to skip those.
+The house rules are not boilerplate. Docstrings on public code (`python-docstrings`), `Annotated[..., Field()]` and `Decimal` for money (`pydantic-annotated`), descriptive names (`naming`), the layering in `service-architecture`, and the pieces `add-feature` lists all stay. Ponytail decides how much code to write, not whether to skip those.

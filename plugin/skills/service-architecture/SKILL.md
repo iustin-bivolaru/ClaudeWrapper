@@ -1,6 +1,6 @@
 ---
 name: service-architecture
-description: The reference architecture for an async Python backend service (FastAPI + SQLAlchemy + Pydantic + background worker) — package layout (one package per layer, one module per resource), layers and their rules, composition root, dependency injection, transaction ownership, error flow, auth, configuration, background work via transactional outbox, observability. Use when creating a new service or project, designing a subsystem, deciding where new code belongs, reviewing a design or a large change for architectural fit, or when a change crosses several layers. For a single concrete task, use the matching add-* skill.
+description: The reference architecture for an async Python backend service (FastAPI + SQLAlchemy + Pydantic + background worker) — package layout (one package per layer, one module per resource), layers and their rules, composition root, dependency injection, transaction ownership, error flow, auth, configuration, background work via transactional outbox, observability. Use when creating a new service or project, designing a subsystem, deciding where new code belongs, reviewing a design or a large change for architectural fit, or when a change crosses several layers. For a single concrete task, use add-feature.
 ---
 
 # Service architecture
@@ -143,4 +143,4 @@ Check, and report each item that fails:
 8. Do secrets or personal data reach logs, traces or checkpoints?
 9. Does new code follow the package layout: one module per resource in the layer's package, no new flat `models.py`/`routes.py`/`schemas.py`, Pydantic and ORM in their own packages?
 
-When proposing a new subsystem, write a short design first: the modules it adds in the package layout, its layers, what it adds to the composition root, its tables and migrations, its settings, its outbox types and its error codes. Then list which add-* skills implement each part.
+When proposing a new subsystem, write a short design first: the modules it adds in the package layout, its layers, what it adds to the composition root, its tables and migrations, its settings, its outbox types and its error codes. Then check each part against the `add-feature` checklists.
