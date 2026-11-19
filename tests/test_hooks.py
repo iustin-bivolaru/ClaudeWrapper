@@ -1208,6 +1208,35 @@ def test_merge_after_change_since_review_blocked(repo, tmp_path):
     assert "service.py" in result.stderr
 
 
+def test_merge_after_rebase_onto_main_allowed(repo, tmp_path):
+    env = reviewed_change(repo, tmp_path)
+    git(repo, "switch", "-q", "main")
+    (repo / "other.py").write_text("OTHER = 1\n")
+    (repo / "a.txt").write_text("y\n")
+    git(repo, "add", "other.py", "a.txt")
+    git(repo, "commit", "-qm", "feat: change on main")
+    git(repo, "switch", "-q", "feat/x")
+    git(repo, "rebase", "-q", "main")
+    result = merge(repo, env)
+    assert result.returncode == 0, result.stderr
+
+
+def test_merge_after_rebase_with_own_change_blocked(repo, tmp_path):
+    env = reviewed_change(repo, tmp_path)
+    git(repo, "switch", "-q", "main")
+    (repo / "other.py").write_text("OTHER = 1\n")
+    git(repo, "add", "other.py")
+    git(repo, "commit", "-qm", "feat: change on main")
+    git(repo, "switch", "-q", "feat/x")
+    git(repo, "rebase", "-q", "main")
+    (repo / "service.py").write_text("ANSWER = 43\n")
+    git(repo, "commit", "-qam", "fix: tweak after rebase")
+    result = merge(repo, env)
+    assert result.returncode == 2
+    assert "service.py" in result.stderr
+    assert "other.py" not in result.stderr
+
+
 def test_merge_blocked_while_newer_review_unfinished(repo, tmp_path):
     env = reviewed_change(repo, tmp_path)
     start_reviewer("merge", "reviewer-two", env)

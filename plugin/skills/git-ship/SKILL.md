@@ -87,6 +87,8 @@ git push origin HEAD
 - `gh pr create` uses `--head` explicitly, so the branch doesn't need upstream tracking.
 If the remote has diverged on your own branch: `git pull --rebase origin <branch>`, rerun tests, push again (`--force-with-lease` only on your own feature branch, and only after a rebase you did).
 
+**Bring the branch up to date with `main`** when GitHub reports a conflict or the branch is behind: `git fetch origin main` (on its own), then `git rebase origin/main`. Resolve conflicts, `git add` the files, `git rebase --continue` (never `-i`: there is no editor). Rerun the tests, then `git push --force-with-lease origin HEAD`. The merge gate accepts files that now match `main`; a file you changed while resolving a conflict needs a new review.
+
 ## 4. Open or update the pull request
 Load the **`writing-prs`** skill. It covers gathering the facts, the title, the body template, the security rules, and `gh pr create --body-file`.
 - If a PR already exists for the branch (`gh pr view`), pushing updates its commits. Also update its description when what the PR does has changed (`writing-prs`, step 5).
@@ -99,7 +101,7 @@ gh pr merge --merge --delete-branch --match-head-commit <full sha from above>
 ```
 - Run it on its own, like every `gh` command. `--merge` keeps the Conventional Commit messages in `main`. `--delete-branch` also switches you back to `main`.
 - A hook refuses the merge when the review isn't both `APPROVE` and `MATCHES`, when no review ran (XS), when HEAD holds anything the reviewer didn't see (a fix made after the approval needs a new review, both steps), when `--match-head-commit` isn't HEAD, and always with `--admin`.
-- If GitHub refuses (failing checks, branch protection, a conflict), leave the PR open and report why. Don't retry with other flags.
+- If GitHub reports a conflict or an out-of-date branch, rebase onto `main` (section 3) and merge again. If it refuses for another reason (failing checks, branch protection), leave the PR open and report why. Don't retry with other flags.
 
 ## 6. Report
 The branch name, the commit hash(es) (`git log --oneline -n 3`), the PR URL, and whether it was merged or why it was left open.

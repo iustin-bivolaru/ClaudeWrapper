@@ -6,8 +6,9 @@
   to it. A new reviewer starts a fresh record.
 * PreToolUse on Bash - ``gh pr merge`` is allowed only when the latest reviewer said
   ``VERDICT: APPROVE`` and ``REQUEST: MATCHES``, every file in HEAD is exactly what it
-  reviewed, and the merge is pinned to HEAD with ``--match-head-commit``. ``--admin``
-  is never allowed.
+  reviewed, and the merge is pinned to HEAD with ``--match-head-commit``. A file
+  that matches the base branch came from it (a rebase onto or merge of the base) and
+  needs no new review. ``--admin`` is never allowed.
 """
 
 from __future__ import annotations
@@ -29,6 +30,7 @@ VERDICT_PATTERN = re.compile(r"VERDICT:\s*(APPROVE|CHANGES_REQUESTED)")
 REQUEST_PATTERN = re.compile(r"REQUEST:\s*(MATCHES|GAPS)")
 MERGE_COMMAND = re.compile(r"\bgh\s+pr\s+merge\b")
 MAX_LISTED_PATHS = 5
+BASE_REFS = ("origin/HEAD", "origin/main", "origin/master", "main", "master")
 
 
 def _git(root: Path, *args: str, stdin: str | None = None) -> str:
@@ -104,17 +106,18 @@ def working_tree_snapshot(root: Path) -> tuple[dict[str, str], list[str]]:
     return dict(zip(existing, blob_ids, strict=True)), sorted(tracked.intersection(existing))
 
 
-def head_tree(root: Path) -> dict[str, str]:
-    """List the files committed at HEAD.
+def head_tree(root: Path, ref: str = "HEAD") -> dict[str, str]:
+    """List the files committed at a ref.
 
     Args:
         root: Repository directory.
+        ref: The commit to list.
 
     Returns:
-        ``path -> blob id`` for every file in HEAD's tree.
+        ``path -> blob id`` for every file in the ref's tree.
     """
     files = {}
-    for entry in _git(root, "ls-tree", "-r", "-z", "HEAD").split("\0"):
+    for entry in _git(root, "ls-tree", "-r", "-z", ref).split("\0"):
         if not entry:
             continue
         meta, path = entry.split("\t", 1)
@@ -122,6 +125,24 @@ def head_tree(root: Path) -> dict[str, str]:
         if object_type == "blob":
             files[path] = object_id
     return files
+
+
+def base_tree(root: Path) -> dict[str, str]:
+    """List the files of the base branch, so files a rebase or merge brought in aren't treated as unreviewed.
+
+    Args:
+        root: Repository directory.
+
+    Returns:
+        ``path -> blob id`` of the first base ref that exists, or an empty dict.
+    """
+    for ref in BASE_REFS:
+        try:
+            _git(root, "rev-parse", "--verify", "-q", f"{ref}^{{commit}}")
+            return head_tree(root, ref)
+        except (RuntimeError, OSError, subprocess.SubprocessError):
+            continue
+    return {}
 
 
 def _load_state(payload: dict[str, Any]) -> dict[str, Any]:
@@ -180,20 +201,24 @@ def record_review(payload: dict[str, Any]) -> None:
     (state_dir(payload) / REVIEW_STATE_FILE).write_text(json.dumps(state))
 
 
-def unreviewed_paths(snapshot: dict[str, str], tracked: list[str], committed: dict[str, str]) -> list[str]:
+def unreviewed_paths(
+    snapshot: dict[str, str], tracked: list[str], committed: dict[str, str], base: dict[str, str] | None = None
+) -> list[str]:
     """Compare what HEAD holds with what the reviewer saw.
 
     Args:
         snapshot: ``path -> blob id`` of the reviewed working tree.
         tracked: Paths that were tracked when the review ran.
         committed: ``path -> blob id`` at HEAD.
+        base: ``path -> blob id`` of the base branch. A path that matches it came from the base.
 
     Returns:
-        Paths that changed, appeared or disappeared after the review.
+        Paths that changed, appeared or disappeared after the review and don't match the base.
     """
+    base = base or {}
     changed = [path for path, blob_id in committed.items() if snapshot.get(path) != blob_id]
     removed = [path for path in tracked if path not in committed]
-    return sorted(changed + removed)
+    return sorted(path for path in changed + removed if not base or base.get(path) != committed.get(path))
 
 
 def check_merge(payload: dict[str, Any]) -> int:
@@ -226,6 +251,7 @@ def check_merge(payload: dict[str, Any]) -> int:
     try:
         head = _git(root, "rev-parse", "HEAD").strip()
         committed = head_tree(root)
+        base = base_tree(root)
     except (RuntimeError, OSError, subprocess.SubprocessError) as error:
         block(f"can't read HEAD to check it against the review: {error}")
     pinned = re.search(r"--match-head-commit[=\s]+([0-9a-f]{40})\b", command)
@@ -237,7 +263,7 @@ def check_merge(payload: dict[str, Any]) -> int:
     snapshot = state.get("snapshot")
     if not isinstance(snapshot, dict):
         block("the review didn't record which files it saw, so the merge can't be checked. Leave the PR open.")
-    unreviewed = unreviewed_paths(snapshot, state.get("tracked") or [], committed)
+    unreviewed = unreviewed_paths(snapshot, state.get("tracked") or [], committed, base)
     if unreviewed:
         listed = ", ".join(unreviewed[:MAX_LISTED_PATHS]) + (" …" if len(unreviewed) > MAX_LISTED_PATHS else "")
         block(
