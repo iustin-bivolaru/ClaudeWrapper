@@ -1099,7 +1099,7 @@ def test_onboard_outside_git(tmp_path):
 def test_new_repository_in_session_blocked(repo, command):
     result = run_hook("pre-tool", tool("Bash", cwd=repo, command=command))
     assert result.returncode == 2, command
-    assert "run `remi` again" in result.stderr
+    assert "remi new <folder>" in result.stderr
 
 
 @pytest.mark.parametrize(
@@ -1195,10 +1195,12 @@ LAUNCHER = SCRIPTS.parents[2] / "bin" / "remi"
 SCOPED_RESPONSE = "HTTP/2.0 200 OK\nX-Oauth-Scopes: {scopes}\n\n{{}}"
 
 
-def run_launcher(tmp_path: Path, gh_script: str | None, cwd: Path | None = None, **extra_env: str):
+def run_launcher(
+    tmp_path: Path, gh_script: str | None, cwd: Path | None = None, args: tuple[str, ...] = (), **extra_env: str
+):
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir(exist_ok=True)
-    (fake_bin / "claude").write_text("#!/bin/sh\necho CLAUDE STARTED\n")
+    (fake_bin / "claude").write_text('#!/bin/sh\necho CLAUDE STARTED in "$PWD" with "$*"\n')
     (fake_bin / "claude").chmod(0o755)
     if gh_script is not None:
         (fake_bin / "gh").write_text(f"#!/bin/sh\n{gh_script}\n")
@@ -1216,7 +1218,7 @@ def run_launcher(tmp_path: Path, gh_script: str | None, cwd: Path | None = None,
         **extra_env,
     }
     return subprocess.run(
-        ["bash", str(LAUNCHER)], capture_output=True, text=True, env=env, cwd=cwd or tmp_path, check=False
+        ["bash", str(LAUNCHER), *args], capture_output=True, text=True, env=env, cwd=cwd or tmp_path, check=False
     )
 
 
@@ -1277,6 +1279,39 @@ def test_launcher_leaves_folder_alone_without_consent(tmp_path, choice):
     assert "CLAUDE STARTED" in result.stdout
     assert not (project / ".git").exists()
     assert ("not a git repository" in result.stderr) == (choice == "ask")
+
+
+def test_remi_new_creates_the_project_folder_and_passes_the_request(tmp_path):
+    result = run_launcher(tmp_path, GH_READY, args=("new", "bank-api", "build a bank API"), REMI_NEW_REPO="github")
+    assert result.returncode == 0, result.stderr
+    project = tmp_path / "bank-api"
+    assert f"CLAUDE STARTED in {project}" in result.stdout
+    assert result.stdout.rstrip().endswith("build a bank API")
+    assert (project / ".git").is_dir()
+    assert "gh repo create bank-api --private" in (tmp_path / "gh.log").read_text()
+
+
+@pytest.mark.parametrize("args", [("new",), ("new", "--plan")])
+def test_remi_new_needs_a_folder(tmp_path, args):
+    result = run_launcher(tmp_path, GH_READY, args=args)
+    assert result.returncode == 2
+    assert "usage: remi new" in result.stderr
+
+
+def test_remi_new_refuses_a_folder_inside_a_repository(tmp_path, repo):
+    result = run_launcher(tmp_path, GH_READY, cwd=repo, args=("new", "nested"))
+    assert result.returncode == 2
+    assert "inside the git repository" in result.stderr
+    assert "CLAUDE STARTED" not in result.stdout
+
+
+def test_launcher_points_a_projects_folder_to_remi_new(tmp_path):
+    projects = tmp_path / "projects"
+    (projects / "old-project" / ".git").mkdir(parents=True)
+    result = run_launcher(tmp_path, GH_READY, cwd=projects)
+    assert result.returncode == 0, result.stderr
+    assert "remi new <folder>" in result.stderr
+    assert not (projects / ".git").exists()
 
 
 def test_launcher_rejects_unknown_new_repo_choice(tmp_path):

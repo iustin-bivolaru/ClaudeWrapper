@@ -271,8 +271,9 @@ def check_new_repository(command: str) -> None:
             continue
         block(
             "a repository can't be created inside the session: the sandbox locks a .git made after startup, so "
-            "commits would fail. Ask the user to exit and run `remi` again in the project folder; the launcher "
-            "offers to create the repository (git init, first commit, private GitHub repo) before the session starts."
+            'commits would fail. Ask the user to exit and run `remi new <folder> "<request>"` (a new project) or `remi` '
+            "in the project folder; the launcher creates the repository (git init, first commit, private GitHub repo) "
+            "before the session starts."
         )
 
 
