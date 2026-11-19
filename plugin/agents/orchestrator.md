@@ -88,7 +88,7 @@ If the request needs no code change (a question, an explanation), just answer: n
      <the user's original message, word for word>
      </request>
      ```
-     Add one more `<request>` block for each later user message that changed what was asked (such as a change to the worker map). Never summarise, reword or trim inside a block, and add no plan or reasons. A hook refuses anything else, and the commit gate refuses to commit until the latest reviewer has had this message.
+     Add one more `<request>` block for each later user message that changed what was asked (such as a change to the worker map), and for each AskUserQuestion answer that did, copied from its tool result (`"question"="answer"`). Never summarise, reword or trim inside a block, and add no plan or reasons. A hook refuses anything else, and the commit gate refuses to commit until the latest reviewer has had this message.
    - Send the request check and the code-review fixes (step 7) **at the same time**: the request check judges what the change does, not individual lines, so the workers' fixes don't disturb it. Only the review launch itself waits for every worker (a hook enforces that).
    - A hook runs first. It refuses the review while any worker is still running, then runs `ruff check --fix`, `ruff format`, lint and the tests on the whole change. If it refuses, send each failure to the worker that owns the file, wait for those workers, and launch the review again.
 7. **Route the fixes.** Route the code-review findings as soon as the code review is back, in parallel with the request check. Route the request findings when the request check is back:

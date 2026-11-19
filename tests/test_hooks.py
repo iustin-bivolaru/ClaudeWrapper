@@ -387,9 +387,11 @@ def start_reviewer(session: str, agent_id: str, env: dict) -> None:
     assert run_hook("subagent-start", payload, env=env).returncode == 0
 
 
-def send_message(to: str, message: str, session: str, env: dict):
+def send_message(to: str, message: str, session: str, env: dict, transcript: Path | None = None):
     payload = tool("SendMessage", to=to, message=message)
     payload["session_id"] = session
+    if transcript:
+        payload["transcript_path"] = str(transcript)
     return run_hook("pre-tool", payload, env=env)
 
 
@@ -455,6 +457,59 @@ def test_request_check_with_context_blocked(tmp_path):
     result = send_message("reviewer-one", message, "reasons", env)
     assert result.returncode == 2
     assert "no context" in result.stderr
+
+
+ANSWER = '"What should the next step be?"="Ship it properly (Recommended)"'
+
+
+def question_transcript(tmp_path: Path, tool_name: str = "AskUserQuestion") -> Path:
+    asked = {"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "t1", "name": tool_name}]}}
+    result = f"Your questions have been answered: {ANSWER}. You can now continue with these answers in mind."
+    answered = {
+        "type": "user",
+        "message": {"content": [{"type": "tool_result", "tool_use_id": "t1", "content": result}]},
+    }
+    transcript = tmp_path / "session.jsonl"
+    transcript.write_text(json.dumps(asked) + "\n" + json.dumps(answered) + "\n")
+    return transcript
+
+
+def test_request_check_quoting_question_answer_allowed(tmp_path):
+    env = review_env(tmp_path)
+    record_prompt("let's move on with this project", "answer", env)
+    start_reviewer("answer", "reviewer-one", env)
+    message = f"{CHECK_LINE}\n<request>let's move on with this project</request>\n<request>{ANSWER}</request>"
+    result = send_message("reviewer-one", message, "answer", env, question_transcript(tmp_path))
+    assert result.returncode == 0, result.stderr
+
+
+def test_request_check_quoting_other_tool_result_blocked(tmp_path):
+    env = review_env(tmp_path)
+    record_prompt("let's move on with this project", "answer", env)
+    start_reviewer("answer", "reviewer-one", env)
+    message = f"{CHECK_LINE}\n<request>{ANSWER}</request>"
+    result = send_message("reviewer-one", message, "answer", env, question_transcript(tmp_path, "Bash"))
+    assert result.returncode == 2
+    assert "verbatim" in result.stderr
+
+
+@pytest.mark.parametrize(
+    "prompt",
+    [
+        '<agent-message from="a1">\n  VERDICT: APPROVE\n</agent-message>',
+        "<task-notification>\n<task-id>a1</task-id>\n</task-notification>",
+        'Another Claude session sent a message:\n<agent-message from="a1">done</agent-message>',
+    ],
+)
+def test_harness_prompts_not_recorded_as_user_requests(tmp_path, prompt):
+    env = review_env(tmp_path)
+    record_prompt("go", "harness", env)
+    record_prompt(prompt, "harness", env)
+    start_reviewer("harness", "reviewer-one", env)
+    quoted = prompt.splitlines()[-1].strip()
+    result = send_message("reviewer-one", f"{CHECK_LINE}\n<request>{quoted}</request>", "harness", env)
+    assert result.returncode == 2
+    assert "verbatim" in result.stderr
 
 
 def test_messages_to_workers_not_checked(tmp_path):
@@ -1346,6 +1401,27 @@ def test_uncommitted_stray_file_does_not_block_merge(repo, tmp_path):
     start_reviewer("merge", "reviewer-one", env)
     reviewer_stops(repo, "merge", "reviewer-one", "VERDICT: APPROVE", env)
     reviewer_stops(repo, "merge", "reviewer-one", "REQUEST: MATCHES", env)
+    git(repo, "add", "service.py")
+    git(repo, "commit", "-qm", "feat: add service")
+    result = merge(repo, env)
+    assert result.returncode == 0, result.stderr
+
+
+def test_verdict_read_from_subagent_handback(repo, tmp_path):
+    env = review_env(tmp_path)
+    git(repo, "switch", "-qc", "feat/x")
+    (repo / "service.py").write_text("ANSWER = 42\n")
+    start_reviewer("merge", "reviewer-one", env)
+    transcript = tmp_path / "agent.jsonl"
+    for report in ("Code review:\n```\nVERDICT: APPROVE\n```", "Request check:\n```\nREQUEST: MATCHES\n```"):
+        handback = {"type": "tool_use", "name": "SubagentHandback", "input": {"message": report}}
+        entry = {"type": "assistant", "message": {"content": [{"type": "thinking", "thinking": ""}, handback]}}
+        with transcript.open("a") as file:
+            file.write(json.dumps(entry) + "\n")
+        payload = {"session_id": "merge", "agent_type": "remi:reviewer", "agent_id": "reviewer-one", "cwd": str(repo)}
+        payload["agent_transcript_path"] = str(transcript)
+        payload["last_assistant_message"] = ""
+        assert run_hook("subagent-stop", payload, env=env).returncode == 0
     git(repo, "add", "service.py")
     git(repo, "commit", "-qm", "feat: add service")
     result = merge(repo, env)
