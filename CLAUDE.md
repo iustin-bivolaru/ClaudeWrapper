@@ -13,6 +13,7 @@ uv run pytest -q                                   # all tests (tests/test_hooks
 uv run pytest -q tests/test_hooks.py::test_worker_cap   # one test
 uv run pytest -q -k claude_md                      # tests matching a keyword
 uv run ruff check . && uv run ruff format --check .
+uv run python scripts/bench_hooks.py               # processes and ms per tool call for the current hooks.json
 ./install.sh                                       # symlink bin/remi into ~/.local/bin
 remi onboard                                       # read-only readiness report (runs onboard.py)
 ```
@@ -52,7 +53,7 @@ These are aimed at the *target* projects remi runs in, not at this repo.
 
 Hook state (worker slots, edited files) lives per session under `REMI_STATE_DIR` (default `$TMPDIR/remi/<session_id>`). `quality.py` finds target-project tools in this order: `.venv/bin`, `uv run`, `PATH`, `uvx ruff`. A `[tool.remi]` table in the target's pyproject overrides them.
 
-**Settings (`settings/settings.json`).** These hold the permission deny rules for secret files, the OS sandbox (secret `denyRead`, network allowlist, no unsandboxed escape) and empty attribution. `SECRET_PATH_PATTERNS` in `_common.py` is mirrored here, so change both together.
+**Settings (`settings/settings.json`).** Enables the official `pyright-lsp` plugin (needs `pyright-langserver` on PATH; `install.sh` installs it). Its diagnostics reach only the main session, so workers run `pyright` on their files themselves. The settings also hold the permission deny rules for secret files, the OS sandbox (secret `denyRead`, network allowlist, no unsandboxed escape) and empty attribution. `SECRET_PATH_PATTERNS` in `_common.py` is mirrored here, so change both together.
 
 ## Tests
 
