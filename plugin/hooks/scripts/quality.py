@@ -20,6 +20,10 @@ lines the change added or modified. Autofix and formatting run on the whole file
 if the committed version was already clean; otherwise formatting is limited to the
 changed line ranges. New files are checked in full.
 
+Fingerprints: when tests or the whole gate pass, the hook records the git tree hash of
+the working tree. A later gate on the same tree skips what already passed, so the last
+worker, the pre-review gate and the commit gate don't rerun the tests on identical code.
+
 Commands are auto-detected (uv / .venv / PATH). Lint and format default to ruff,
 scoped as above. Every step can be replaced per project in ``pyproject.toml``
 (a replaced step runs as given, over the whole project)::
@@ -34,17 +38,19 @@ scoped as above. Every step can be replaced per project in ``pyproject.toml``
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import tomllib
 from pathlib import Path
 from typing import Any
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from _common import ALLOW, BLOCK, block, edits_log, is_secret_path, project_dir, repository_root  # noqa: E402
+from _common import ALLOW, BLOCK, block, edits_log, is_secret_path, project_dir, repository_root, state_dir  # noqa: E402
 from agent_policy import _slot_name, request_check_due, slots_locked  # noqa: E402
 from agent_policy import on_stop as release_worker_slot  # noqa: E402
 from claude_md import count_lines, is_claude_md, max_lines  # noqa: E402
@@ -256,7 +262,7 @@ def changed_python_files(root: Path, *, staged_only: bool) -> list[Path]:
     return sorted({candidate for candidate in candidates if candidate.is_file()})
 
 
-def run_gate(root: Path, *, staged_only: bool) -> str | None:
+def run_gate(root: Path, *, staged_only: bool, skip_tests: bool = False) -> str | None:
     """Run every gate step, stopping at the first failure.
 
     Lint and format use the scoped ruff checks (changed lines of existing files, all of a
@@ -266,6 +272,7 @@ def run_gate(root: Path, *, staged_only: bool) -> str | None:
     Args:
         root: Project root.
         staged_only: Check the staged change (commit gate) instead of the working tree.
+        skip_tests: Skip typecheck and tests (they already passed on this exact tree).
 
     Returns:
         Failure report, or None when everything passed.
@@ -282,6 +289,8 @@ def run_gate(root: Path, *, staged_only: bool) -> str | None:
         if unformatted:
             return "format failed: run `ruff format` on the changed code in: " + ", ".join(unformatted)
     for step, cmd in gate_commands(root):
+        if skip_tests and step in TEST_STEPS:
+            continue
         code, out = run(cmd, root)
         if step == "test" and code == 5:  # pytest: no tests collected
             continue
@@ -501,6 +510,165 @@ def running_workers(payload: dict[str, Any], *, excluding_self: bool) -> int:
         return len(active_names) + sum(1 for _ in pending_directory.iterdir())
 
 
+TEST_STEPS = frozenset({"typecheck", "test"})
+
+
+def tree_fingerprint(root: Path) -> str | None:
+    """Hash the working tree (tracked and untracked files, minus ignored ones).
+
+    It stages everything into a throwaway copy of the index and runs ``git write-tree``, so
+    the real index is untouched and unchanged files aren't rehashed.
+
+    Args:
+        root: Repository root.
+
+    Returns:
+        The tree id, or None outside a repository or on any git error.
+    """
+    try:
+        index = subprocess.run(
+            ["git", "rev-parse", "--path-format=absolute", "--git-path", "index"],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        if index.returncode != 0:
+            return None
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            scratch_index = Path(temporary_directory) / "index"
+            real_index = Path(index.stdout.strip())
+            if real_index.is_file():
+                shutil.copyfile(real_index, scratch_index)
+            git_environment = os.environ | {"GIT_INDEX_FILE": str(scratch_index)}
+            added = subprocess.run(
+                ["git", "add", "-A", "."], cwd=root, env=git_environment, capture_output=True, timeout=120, check=False
+            )
+            if added.returncode != 0:
+                return None
+            return _write_tree(root, git_environment)
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+def staged_fingerprint(root: Path) -> str | None:
+    """Hash what is staged right now.
+
+    Args:
+        root: Repository root.
+
+    Returns:
+        The tree id of the index, or None on any git error.
+    """
+    try:
+        return _write_tree(root, None)
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+def _write_tree(root: Path, git_environment: dict[str, str] | None) -> str | None:
+    """Run ``git write-tree`` and return the tree id.
+
+    Args:
+        root: Repository root.
+        git_environment: Environment for git (a scratch ``GIT_INDEX_FILE``), or None for the real index.
+
+    Returns:
+        The tree id, or None when git fails.
+    """
+    tree = subprocess.run(
+        ["git", "write-tree"], cwd=root, env=git_environment, capture_output=True, text=True, timeout=60, check=False
+    )
+    return tree.stdout.strip() if tree.returncode == 0 and tree.stdout.strip() else None
+
+
+def _green_log(payload: dict[str, Any]) -> Path:
+    """Return the file that lists which steps passed on which tree in this session.
+
+    Args:
+        payload: Hook payload (session scope).
+
+    Returns:
+        Path of the log; each line is ``<tree id> <step>``.
+    """
+    return state_dir(payload) / "green-trees.txt"
+
+
+def green_steps(payload: dict[str, Any], tree: str | None) -> set[str]:
+    """Return the steps that already passed on ``tree``.
+
+    Args:
+        payload: Hook payload (session scope).
+        tree: Tree id from ``tree_fingerprint``; None means unknown.
+
+    Returns:
+        Step names (``tests``, ``gate``), empty when unknown.
+    """
+    log_path = _green_log(payload)
+    if not tree or not log_path.is_file():
+        return set()
+    return {
+        line.split(" ", 1)[1]
+        for line in log_path.read_text(encoding="utf-8").splitlines()
+        if line.startswith(f"{tree} ")
+    }
+
+
+def mark_green(payload: dict[str, Any], tree: str | None, *steps: str) -> None:
+    """Record that ``steps`` passed on ``tree``.
+
+    Args:
+        payload: Hook payload (session scope).
+        tree: Tree id; nothing is recorded when it's None.
+        steps: Step names (``tests``, ``gate``).
+    """
+    if not tree:
+        return
+    with _green_log(payload).open("a", encoding="utf-8") as log_file:
+        log_file.writelines(f"{tree} {step}\n" for step in steps)
+
+
+def run_tests_once(payload: dict[str, Any], root: Path) -> str | None:
+    """Run typecheck and tests unless they already passed on this exact tree.
+
+    Args:
+        payload: Hook payload (session scope).
+        root: Project root.
+
+    Returns:
+        Failure report, or None when they passed (now or before).
+    """
+    tree = tree_fingerprint(root)
+    if "tests" in green_steps(payload, tree):
+        return None
+    failure = run_steps(root, set(TEST_STEPS))
+    if not failure:
+        mark_green(payload, tree, "tests")
+    return failure
+
+
+def run_gate_once(payload: dict[str, Any], root: Path, tree: str | None, *, staged_only: bool) -> str | None:
+    """Run the full gate unless it already passed on this exact tree.
+
+    Args:
+        payload: Hook payload (session scope).
+        root: Project root.
+        tree: Tree id of what the gate checks; None disables the shortcut.
+        staged_only: Check the staged change (commit gate) instead of the working tree.
+
+    Returns:
+        Failure report, or None when it passed (now or before).
+    """
+    already_green = green_steps(payload, tree)
+    if "gate" in already_green:
+        return None
+    failure = run_gate(root, staged_only=staged_only, skip_tests="tests" in already_green)
+    if not failure:
+        mark_green(payload, tree, "gate", "tests")
+    return failure
+
+
 def run_steps(root: Path, wanted: set[str]) -> str | None:
     """Run only some gate steps (for example just ``test`` and ``typecheck``).
 
@@ -652,7 +820,10 @@ def on_commit(payload: dict[str, Any]) -> int:
             + "\n- ".join(findings)
             + f"\nRemove them. For a deliberate test fixture, add the comment '{ALLOW_MARKER}' on that line."
         )
-    failure = run_gate(root, staged_only=True)
+    staged_tree = staged_fingerprint(root)
+    # The shortcut holds only when everything is staged: then the staged tree is the tested tree.
+    same_tree = staged_tree if staged_tree and staged_tree == tree_fingerprint(root) else None
+    failure = run_gate_once(payload, root, same_tree, staged_only=True)
     if failure:
         block(f"quality gate failed, commit refused.\n{failure}")
     return ALLOW
@@ -712,7 +883,7 @@ def _worker_gate(payload: dict[str, Any]) -> int:
     _, status = run("git status --porcelain", root, timeout=30)
     if not status.strip():
         return ALLOW
-    failure = run_steps(root, {"typecheck", "test"})
+    failure = run_tests_once(payload, root)
     if failure:
         print(
             "Tests are red. Fix them if the failure is in your files. If it's outside them, "
@@ -754,7 +925,7 @@ def on_stop(payload: dict[str, Any]) -> int:
         return BLOCK
     if not running_workers(payload, excluding_self=False):
         for root in files_by_root:
-            failure = run_steps(root, {"typecheck", "test"})
+            failure = run_tests_once(payload, root)
             if failure:
                 print(f"Tests are red after your edits. Fix them:\n{failure}", file=sys.stderr)
                 return BLOCK
@@ -782,7 +953,7 @@ def on_review(payload: dict[str, Any]) -> int:
         block(f"{still_running} worker(s) still running. Wait until every worker has finished, then start the review.")
     root = project_dir(payload)
     apply_project_fixes(root, changed_python_files(root, staged_only=False))
-    failure = run_gate(root, staged_only=False)
+    failure = run_gate_once(payload, root, tree_fingerprint(root), staged_only=False)
     if failure:
         block(
             "the change isn't green, so the review is refused. Send each failure to the worker that owns "

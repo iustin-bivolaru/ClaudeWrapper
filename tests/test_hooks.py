@@ -1371,3 +1371,75 @@ def test_stop_runs_tests_and_clears_log_when_green(repo, tmp_path):
     (repo / "pyproject.toml").write_text('[tool.remi]\ntest = "true"\n')
     assert run_hook("stop", main_stop(repo), env=env).returncode == 0
     assert not (tmp_path / "state" / "turn" / "edits" / "main.txt").exists()
+
+
+# --- fingerprints: identical trees aren't tested twice ----------------------
+
+
+@pytest.fixture
+def counted_repo(repo, tmp_path_factory):
+    """A feature branch whose test step appends a line to a counter outside the repo."""
+    outside = tmp_path_factory.mktemp("outside")
+    counter = outside / "test-runs.txt"
+    git(repo, "switch", "-qc", "feat/x")
+    (repo / "pyproject.toml").write_text(f'[tool.remi]\ntest = "echo run >> {counter}"\n')
+    (repo / "fees.py").write_text('"""Fees."""\n\nFEE_AMOUNT = 2\n')
+    env = {"REMI_STATE_DIR": str(outside / "state"), "PATH": "/usr/bin:/bin", "HOME": str(outside)}
+    return repo, env, counter
+
+
+def count_test_runs(counter: Path) -> int:
+    return len(counter.read_text().splitlines()) if counter.exists() else 0
+
+
+def stop_after_edit(repo: Path, env: dict, file_name: str):
+    payload = tool("Write", cwd=repo, file_path=str(repo / file_name), content="")
+    payload["session_id"] = "turn"
+    run_hook("pre-tool", payload, env=env)
+    return run_hook("stop", main_stop(repo), env=env)
+
+
+def commit(repo: Path, env: dict):
+    payload = tool("Bash", cwd=repo, command="git commit -m 'feat: add fees'")
+    payload["session_id"] = "turn"
+    return run_hook("pre-tool", payload, env=env)
+
+
+def test_commit_skips_tests_that_passed_on_the_same_tree(counted_repo):
+    repo, env, counter = counted_repo
+    assert stop_after_edit(repo, env, "fees.py").returncode == 0
+    assert count_test_runs(counter) == 1
+    git(repo, "add", "-A")
+    result = commit(repo, env)
+    assert result.returncode == 0, result.stderr
+    assert count_test_runs(counter) == 1  # same tree: not tested again
+
+
+def test_any_change_after_green_reruns_tests(counted_repo):
+    repo, env, counter = counted_repo
+    stop_after_edit(repo, env, "fees.py")
+    (repo / "fees.py").write_text('"""Fees."""\n\nFEE_AMOUNT = 3\n')
+    git(repo, "add", "-A")
+    assert commit(repo, env).returncode == 0
+    assert count_test_runs(counter) == 2
+
+
+def test_partial_staging_reruns_the_gate(counted_repo):
+    repo, env, counter = counted_repo
+    (repo / "notes.txt").write_text("not staged\n")
+    stop_after_edit(repo, env, "fees.py")
+    git(repo, "add", "fees.py", "pyproject.toml")
+    assert commit(repo, env).returncode == 0
+    assert count_test_runs(counter) == 2  # staged tree differs from the tested working tree
+
+
+def test_fingerprint_leaves_the_real_index_alone(counted_repo):
+    sys.path.insert(0, str(SCRIPTS))
+    from quality import staged_fingerprint, tree_fingerprint
+
+    repo, _, _ = counted_repo
+    before = staged_fingerprint(repo)
+    working_tree = tree_fingerprint(repo)
+    assert working_tree and working_tree != before
+    assert staged_fingerprint(repo) == before
+    assert tree_fingerprint(repo) == working_tree  # deterministic
