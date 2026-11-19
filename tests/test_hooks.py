@@ -1009,8 +1009,8 @@ def onboarding_repo(repo: Path) -> Path:
     (repo / "CLAUDE.md").write_text(lines_of(250))
     (repo / ".claude" / "agents").mkdir(parents=True)
     (repo / ".claude" / "agents" / "layering-reviewer.md").write_text("---\nname: layering-reviewer\n---\n")
-    (repo / ".claude" / "skills" / "naming").mkdir(parents=True)
-    (repo / ".claude" / "skills" / "naming" / "SKILL.md").write_text("---\nname: naming\n---\n")
+    (repo / ".claude" / "skills" / "ponytail").mkdir(parents=True)
+    (repo / ".claude" / "skills" / "ponytail" / "SKILL.md").write_text("---\nname: ponytail\n---\n")
     hooks = {
         "hooks": {
             "PostToolUse": [
@@ -1047,7 +1047,7 @@ def test_onboard_reports_project_state(onboarding_repo):
     report = result.stdout
     assert "CLAUDE.md: 250 lines (limit 200)" in report
     assert "layering-reviewer: blocked under remi" in report
-    assert "same name as a remi skill: naming" in report
+    assert "same name as a remi skill: ponytail" in report
     assert "duplicates remi's lint/format hook" in report
     assert ".env.production is committed to git" in report
     assert "git-ignored and unreadable for remi: .env" in report

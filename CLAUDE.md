@@ -33,7 +33,7 @@ Ruff: line length 120, py311, rules `E F I B UP S D` with Google docstrings (`D`
 The workflow lives in `orchestrator.md`. The hooks enforce the parts that must not depend on the prompt.
 
 **Skills (`plugin/skills/*/SKILL.md`).** There are three kinds:
-- house style: `python-service-style`, `ponytail`, `python-docstrings`, `pydantic-annotated`, `naming`, `git-ship`, `writing-prs`, `writing-worker-briefs`
+- house style: `python-service-style`, `ponytail`, `git-ship`, `writing-prs`, `writing-worker-briefs`
 - architecture: `service-architecture`, `agent-orchestration-architecture`
 - task checklists: `add-feature`
 
