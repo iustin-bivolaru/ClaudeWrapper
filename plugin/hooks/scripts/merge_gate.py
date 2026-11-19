@@ -3,7 +3,9 @@
 * ``record_review`` - called from ``quality.py worker`` when a reviewer stops. The
   code review's ``VERDICT`` is stored with a snapshot (path -> git blob id) of every
   non-ignored file the reviewer saw; the request check's ``REQUEST`` is stored next
-  to it. A new reviewer starts a fresh record.
+  to it. A new reviewer starts a fresh record. The hand-back can reach the transcript
+  after SubagentStop has read it, so the transcript path is stored too and the merge
+  gate reads the latest results from it again.
 * PreToolUse on Bash - ``gh pr merge`` is allowed only when the latest reviewer said
   ``VERDICT: APPROVE`` and ``REQUEST: MATCHES``, every file in HEAD is exactly what it
   reviewed, and the merge is pinned to HEAD with ``--match-head-commit``. A file
@@ -56,29 +58,24 @@ def _git(root: Path, *args: str, stdin: str | None = None) -> str:
     return result.stdout
 
 
-def _last_message(payload: dict[str, Any]) -> str:
-    """Return the stopping subagent's final message.
+def _transcript_reports(transcript: object) -> list[str]:
+    """Return every report in a subagent transcript, oldest first.
+
+    A report is an assistant message's text, or the message of its ``SubagentHandback`` call.
 
     Args:
-        payload: SubagentStop payload.
-
-    A subagent may hand its report back through a ``SubagentHandback`` tool call instead of a
-    final text message, so the transcript's last report is read too: the last assistant text or
-    handback message, whichever came later.
+        transcript: Path to the agent's JSONL transcript, or None.
 
     Returns:
-        ``last_assistant_message`` and the last report in the agent's transcript, joined; or "".
+        One string per assistant message that carried a report; empty when unreadable.
     """
-    message = payload.get("last_assistant_message")
-    message = message if isinstance(message, str) else ""
-    transcript = payload.get("agent_transcript_path")
     if not transcript:
-        return message
-    last_report = ""
+        return []
     try:
         lines = Path(str(transcript)).read_text().splitlines()
     except OSError:
-        return message
+        return []
+    reports = []
     for line in lines:
         try:
             entry = json.loads(line)
@@ -87,10 +84,49 @@ def _last_message(payload: dict[str, Any]) -> str:
         content = (entry.get("message") or {}).get("content") if entry.get("type") == "assistant" else None
         if not isinstance(content, list):
             continue
-        reports = [_report_text(part) for part in content if isinstance(part, dict)]
-        if any(reports):
-            last_report = "\n".join(report for report in reports if report)
-    return "\n".join(text for text in (message, last_report) if text)
+        parts = [_report_text(part) for part in content if isinstance(part, dict)]
+        if any(parts):
+            reports.append("\n".join(part for part in parts if part))
+    return reports
+
+
+def _last_message(payload: dict[str, Any]) -> str:
+    """Return the stopping subagent's final message.
+
+    A subagent may hand its report back through a ``SubagentHandback`` tool call instead of a
+    final text message, so the transcript's last report is read too.
+
+    Args:
+        payload: SubagentStop payload.
+
+    Returns:
+        ``last_assistant_message`` and the last report in the agent's transcript, joined; or "".
+    """
+    message = payload.get("last_assistant_message")
+    message = message if isinstance(message, str) else ""
+    reports = _transcript_reports(payload.get("agent_transcript_path"))
+    return "\n".join(text for text in (message, reports[-1] if reports else "") if text)
+
+
+def _results_in_transcript(transcript: object) -> dict[str, str]:
+    """Read the latest ``VERDICT`` and ``REQUEST`` from a reviewer's whole transcript.
+
+    The hand-back can reach the transcript after SubagentStop has already read it, so the
+    merge gate reads it again when it runs.
+
+    Args:
+        transcript: Path to the reviewer's JSONL transcript, or None.
+
+    Returns:
+        ``verdict`` and ``request`` keys for the results found.
+    """
+    results = {}
+    for report in _transcript_reports(transcript):
+        for key, pattern in (("verdict", VERDICT_PATTERN), ("request", REQUEST_PATTERN)):
+            match = pattern.search(report)
+            if match:
+                results[key] = match.group(1)
+    return results
 
 
 def _report_text(part: dict[str, Any]) -> str:
@@ -209,9 +245,12 @@ def record_review(payload: dict[str, Any]) -> None:
     state = _load_state(payload)
     if state.get("reviewer") != reviewer:
         state = {"reviewer": reviewer}
+    if payload.get("agent_transcript_path"):
+        state["transcript"] = str(payload["agent_transcript_path"])
     verdict = VERDICT_PATTERN.search(message)
     if verdict:
         state["verdict"] = verdict.group(1)
+    if verdict or "snapshot" not in state:
         try:
             state["snapshot"], state["tracked"] = working_tree_snapshot(project_dir(payload))
         except (RuntimeError, OSError, ValueError, subprocess.SubprocessError):
@@ -263,6 +302,7 @@ def check_merge(payload: dict[str, Any]) -> int:
             "no finished review covers this change, so remi doesn't merge it. Merging needs the latest reviewer's "
             "VERDICT: APPROVE and REQUEST: MATCHES. Leave the PR open for the user."
         )
+    state.update(_results_in_transcript(state.get("transcript")))
     if state.get("verdict") != "APPROVE" or state.get("request") != "MATCHES":
         block(
             f"the latest review said VERDICT: {state.get('verdict', 'none')}, REQUEST: {state.get('request', 'none')}. "

@@ -692,6 +692,20 @@ def test_last_worker_runs_tests(repo, tmp_path):
     assert "Tests are red" in result.stderr
 
 
+def test_red_worker_frees_its_slot(repo, tmp_path):
+    (tmp_path / "state").mkdir()
+    env = pipeline_env(tmp_path)
+    (repo / "pyproject.toml").write_text('[tool.remi]\nfix = "true"\ntest = "exit 3"\n')
+    (repo / "tests").mkdir()
+    start_worker("red-worker", "agent-one", env)
+    assert run_hook("subagent-stop", worker_stop(repo, "red-worker", "agent-one"), env=env).returncode == 2
+    payload = tool("Agent", cwd=repo, subagent_type="remi:reviewer", prompt="Review main...feat/x")
+    payload["session_id"] = "red-worker"
+    result = run_hook("pre-tool", payload, env=env)
+    assert result.returncode == 2
+    assert "review is refused" in result.stderr  # the real failure, not "still running"
+
+
 def test_review_refused_while_workers_run(repo, tmp_path):
     (tmp_path / "state").mkdir()
     env = pipeline_env(tmp_path)
@@ -1444,6 +1458,43 @@ def test_verdict_read_from_transcript_when_message_missing(repo, tmp_path):
     git(repo, "commit", "-qm", "feat: add service")
     result = merge(repo, env)
     assert result.returncode == 0, result.stderr
+
+
+def handback_entry(report: str) -> str:
+    handback = {"type": "tool_use", "name": "SubagentHandback", "input": {"message": report}}
+    return json.dumps({"type": "assistant", "message": {"content": [handback]}}) + "\n"
+
+
+def test_hand_back_written_after_reviewer_stop_still_counts(repo, tmp_path):
+    env = review_env(tmp_path)
+    git(repo, "switch", "-qc", "feat/x")
+    (repo / "service.py").write_text("ANSWER = 42\n")
+    start_reviewer("merge", "reviewer-one", env)
+    transcript = tmp_path / "agent.jsonl"
+    transcript.write_text("")
+    payload = {"session_id": "merge", "agent_type": "remi:reviewer", "agent_id": "reviewer-one", "cwd": str(repo)}
+    payload["agent_transcript_path"] = str(transcript)
+    for report in ("Code review:\nVERDICT: APPROVE", "Request check:\nREQUEST: MATCHES"):
+        assert run_hook("subagent-stop", payload, env=env).returncode == 0  # runs before the hand-back is written
+        with transcript.open("a") as file:
+            file.write(handback_entry(report))
+    git(repo, "add", "service.py")
+    git(repo, "commit", "-qm", "feat: add service")
+    result = merge(repo, env)
+    assert result.returncode == 0, result.stderr
+
+
+def test_latest_request_result_in_transcript_wins(repo, tmp_path):
+    env = reviewed_change(repo, tmp_path)
+    transcript = tmp_path / "agent.jsonl"
+    transcript.write_text(handback_entry("REQUEST: MATCHES") + handback_entry("REQUEST: GAPS"))
+    payload = {"session_id": "merge", "agent_type": "remi:reviewer", "agent_id": "reviewer-one", "cwd": str(repo)}
+    payload["agent_transcript_path"] = str(transcript)
+    payload["last_assistant_message"] = "REQUEST: MATCHES"
+    assert run_hook("subagent-stop", payload, env=env).returncode == 0
+    result = merge(repo, env)
+    assert result.returncode == 2
+    assert "REQUEST: GAPS" in result.stderr
 
 
 def test_other_commands_pass_merge_gate(repo, tmp_path):

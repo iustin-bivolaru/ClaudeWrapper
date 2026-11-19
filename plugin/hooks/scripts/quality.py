@@ -9,8 +9,9 @@ Handlers, called by ``dispatch.py``:
                for secrets and run the full gate; block the commit on failure.
 * ``worker`` - SubagentStop: ``ruff check --fix`` + ``ruff format`` on the files
                this worker edited, then lint them; run the tests when no other
-               worker is still running. A worker may not finish while red. For a
-               reviewer, it records the verdict for the merge gate (``merge_gate.py``).
+               worker is still running. A red gate is sent back to the worker, but
+               its slot is freed either way. For a reviewer, it records the verdict
+               for the merge gate (``merge_gate.py``).
 * ``review`` - PreToolUse on Agent: before ``remi:reviewer`` starts, every worker
                must be done, and fix + format + lint + tests must pass on the
                whole change. A red gate refuses the review.
@@ -830,21 +831,25 @@ def on_commit(payload: dict[str, Any]) -> int:
 
 
 def on_worker_stop(payload: dict[str, Any]) -> int:
-    """Keep a worker running until the gate passes, then free its slot.
+    """Run the worker's gate and free its slot.
+
+    The slot is freed even when the gate is red. The worker has already handed its report
+    back by then, and Claude Code may not resume it, so a held slot would look like a
+    running worker. The pre-review gate refuses a red change with the actual failure.
 
     Args:
         payload: SubagentStop payload.
 
     Returns:
-        Exit code; 2 makes the worker continue fixing.
+        Exit code; 2 asks the worker to continue fixing.
     """
     if str(payload.get("agent_type", "")).endswith("reviewer"):
         record_review(payload)
         return ALLOW
-    code = _worker_gate(payload)
-    if code == ALLOW:
+    try:
+        return _worker_gate(payload)
+    finally:
         release_worker_slot(payload)
-    return code
 
 
 def _worker_gate(payload: dict[str, Any]) -> int:
