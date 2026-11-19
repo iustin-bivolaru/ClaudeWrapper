@@ -17,7 +17,7 @@ remi is plain Claude Code with a fixed team, house rules and safety rails added 
 
 | Agent | Model | Job |
 |---|---|---|
-| **Orchestrator** | Opus | The session you talk to. It sizes the task (XS/S/M/L), creates the branch, plans, hands work to workers, sends review fixes back to them, then commits, pushes, opens the PR and merges it. |
+| **Orchestrator** | Opus | The session you talk to. It sizes the task (XS/S/M/L), creates the branch, plans, hands work to workers and sends review fixes back to them. Then it writes the commit message and PR text, and ships with one `remi ship` command. |
 | **Worker** | Sonnet | Writes the code. There is 1 by default, and up to 3 in parallel for big tasks, each owning its own files. Workers never commit. |
 | **Reviewer** | Opus, read-only | Reviews the diff **cold**: it gets only "against main", with no explanation. After that it gets your original request word for word and checks that the change does what you asked, and nothing extra. |
 
@@ -32,10 +32,10 @@ you: "add X"
   → gate: all workers done, ruff fix/format, lint, typecheck and tests green on the whole change
   → reviewer: blind code review, then the check against your request
   → findings go back to the workers that own the files, then one more review
-  → commit gate: secret scan, naming, format, lint, tests
-  → push, PR
-  → merge gate: review said APPROVE + MATCHES, and the code is exactly what was reviewed
-  → gh pr merge (otherwise the PR stays open for you)
+  → orchestrator writes the commit message and PR text, then runs `remi ship`, which does:
+      commit gate (secret scan, naming, format, lint, tests) → commit → push → PR
+      → merge gate (review said APPROVE + MATCHES, code is exactly what was reviewed)
+      → gh pr merge (otherwise the PR stays open for you)
 ```
 
 ## The rules: skills (guidance the model reads)
@@ -120,7 +120,7 @@ The status line shows the model, the branch, the session cost and how full the c
 
 | Path | What |
 |---|---|
-| `bin/remi` | The launcher |
+| `bin/remi` | The launcher (also `remi onboard` and `remi ship`) |
 | `plugin/agents/` | `orchestrator.md`, `worker.md`, `reviewer.md` |
 | `plugin/skills/` | The skills listed above |
 | `plugin/hooks/` | `hooks.json`, `dispatch.py` and the hook modules |

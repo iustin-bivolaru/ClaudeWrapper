@@ -5,7 +5,7 @@ A cost-aware, security-hardened layer over Claude Code: Opus plans, Sonnet worke
 
 | Piece | What it does |
 |---|---|
-| **Orchestrator** (`remi:orchestrator`, Opus) | The main session. Sizes each task (XS/S/M/L) and uses as few workers as the work allows: none for XS (it edits directly), 1 for S, 2 for M, 3 only for L. Related subtasks go to the same worker. It creates the branch, delegates, routes review fixes back to the owning workers, then commits, pushes and opens the PR. |
+| **Orchestrator** (`remi:orchestrator`, Opus) | The main session. Sizes each task (XS/S/M/L) and uses as few workers as the work allows: none for XS (it edits directly), 1 for S, 2 for M, 3 only for L. Related subtasks go to the same worker. It creates the branch, delegates, routes review fixes back to the owning workers, writes the commit message and PR text, then ships with one `remi ship` command. |
 | **Worker** (`remi:worker`, Sonnet) | Does the implementation. Usually one; up to 3 run in parallel for large, independent work, each owning its own files, and each later fixes the review findings for its files. Never commits. |
 | **Reviewer** (`remi:reviewer`, Opus, read-only) | Is launched with only the base branch and no explanation, so it reviews the code cold. It applies the architecture skills' checklists when the diff touches those layers. Once that review is back, the orchestrator sends it your original request, quoted word for word, and it reports anything the change misses or adds that you didn't ask for. |
 | **House-style skills** | `python-service-style` (reST docstrings, descriptive names never single letters, `Annotated[..., Field()]` models and settings, `SecretStr`, `Decimal` for money, logging, errors, async I/O; preloaded in workers), `ponytail` (lazy senior dev: the smallest change that fully solves the task, reuse before stdlib before a new dependency, no unasked-for options or abstractions; adapted from DietrichGebert/ponytail, MIT; also preloaded in workers; the rest load on demand), `git-ship` (branch → commit → push → PR → merge, sandbox-safe git and gh calls, and the PR text: a plain, readable title, a body built from facts — what, why, how it was verified, risk and rollout — with no client data or attribution, kept current as the branch changes), `writing-worker-briefs` (preloaded in the orchestrator: every worker brief puts the task, owned files, critical constraints and acceptance criteria at the beginning and repeats them at the end, with detail in the middle). |
@@ -25,7 +25,7 @@ brew install gitleaks        # optional: stronger secret scan at commit time
 ```
 Requires `claude`, `python3` (3.11+), and `uv` or `ruff`/`pytest` available in the target project.
 
-**GitHub is required.** remi creates repos, commits, pushes and opens PRs itself, so `remi` refuses to start unless `gh` is logged in to github.com with a token that has the `repo` scope. If it isn't, the launcher tells you exactly what to run (`gh auth login -h github.com`, or `gh auth refresh -h github.com -s repo`). `remi onboard` reports the same problem as a failure. The permission allow list already covers `git commit`, `git push`, `git pull`, `git rebase`, `git merge`, `git cherry-pick`, `gh repo create` (private only), `gh pr create/edit` and `gh pr merge` (still behind the merge gate), so none of them prompt.
+**GitHub is required.** remi creates repos, commits, pushes and opens PRs itself, so `remi` refuses to start unless `gh` is logged in to github.com with a token that has the `repo` scope. If it isn't, the launcher tells you exactly what to run (`gh auth login -h github.com`, or `gh auth refresh -h github.com -s repo`). `remi onboard` reports the same problem as a failure. The permission allow list already covers `git commit`, `git push`, `git pull`, `git rebase`, `git merge`, `git cherry-pick`, `gh repo create` (private only), `gh pr create/edit`, `gh pr merge` (still behind the merge gate) and `remi ship`, so none of them prompt.
 
 ## Use
 
@@ -136,13 +136,13 @@ you: task ─▶ orchestrator: feature branch
               request findings ─▶ orchestrator re-plans or asks you             │
                           any fixes ⇒ one more review (both steps)              │
                           ▼                                                     ▼
-              commit gate (hook): request check sent · secret scan · naming ·
-                                  format · lint · tests
-                          ▼
-              push branch ─▶ gh pr create
-                          ▼
-              merge gate (hook): latest review APPROVE + MATCHES · HEAD is exactly
-                          what was reviewed · pinned with --match-head-commit
+              orchestrator writes .remi-pr.md, then runs one command:
+              remi ship -m "<commit>" --title "<PR title>"
+                 commit gate: request check sent · secret scan · naming ·
+                              format · lint · tests ─▶ commit
+                 push branch ─▶ gh pr create (or edit)
+                 merge gate: latest review APPROVE + MATCHES · HEAD is exactly
+                             what was reviewed · pinned with --match-head-commit
                           ▼
               gh pr merge --merge --delete-branch   (otherwise the PR stays open)
 ```
@@ -161,9 +161,8 @@ you: task ─▶ orchestrator: feature branch
 - No commits on `main`/`master`/`develop`/`release`/`production`. The agent creates `feat/…`, `fix/…` and similar branches.
 - **New projects ship too.** Start `remi` in a folder with no repository and the launcher asks before the session starts: `[Y]` runs `git init -b main`, makes one empty `chore: initial commit` on `main` and creates the private GitHub repo with `gh repo create <folder> --private --source . --push`; `[l]` makes only the local repository; `[n]` starts without one. `REMI_NEW_REPO=github|local|off` answers for you (non-interactive runs never create one unasked). It can't happen inside the session: Claude Code's sandbox only protects a repository that exists when the session starts and locks every write to a `.git` made later, so the guard refuses `git init`, `git clone` and `gh repo clone` in the session and points you back to the launcher. The session then works on a feature branch and opens the PR against `main`. The guard allows only that one empty commit on `main`, and `gh repo create --push` only while `main` holds nothing else.
 - No pushes to protected branches, no `--force` (only `--force-with-lease` on your own branch), no `--no-verify`.
-- Files are staged and committed in separate commands, so the gate checks exactly what gets committed.
 - **Conventional Commits, enforced.** Commit headers must look like `<type>(<scope>)!: <description>`. PR titles are plain, readable sentences about the outcome (e.g. `Add SEPA instant payments to transfers`), never a copied commit message. Allowed types: `feat`, `fix`, `refactor`, `perf`, `test`, `docs`, `build`, `ci`, `chore`, `style`, `revert`. The description is lowercase with no trailing period, and the header is ≤ 100 characters (72 recommended). Messages must be passed with `-m`, so editor and `-F` commits are refused.
-- The orchestrator commits, pushes with a standalone `git push origin HEAD`, and opens the PR with `gh pr create`.
+- **Shipping is one command: `remi ship`.** The orchestrator writes only the text: the commit message (`-m`), the PR title (`--title`) and the PR body (`.remi-pr.md` at the repo root, never committed, deleted once the PR is up). `remi ship` stages the change (what is staged, else everything not git-ignored), refuses secret files, runs the commit gate, commits, refuses a branch whose PR was already merged or closed, pushes, opens the PR or updates its title and body, and merges when the merge gate allows it; otherwise it prints why the PR stays open. It runs outside the sandbox (it needs `gh`'s credentials) and calls the same gate code as the hooks, since hooks never see the `git commit` and `gh pr merge` it runs. The guard allows it only as the whole command, with no `$`, backticks, `;`, `&`, `|`, `<`, `>` or newlines anywhere, so nothing in a title can run unsandboxed. Plain `git commit` and `gh pr merge` still work and are gated as before.
 - **It merges its own PR, with no human in the loop, only after an approving, matching review:** the latest reviewer said `VERDICT: APPROVE` and `REQUEST: MATCHES`, HEAD holds exactly the files the reviewer saw (files that match `main` after a rebase count as seen), and the merge is pinned with `--match-head-commit`. Otherwise the PR stays open for you. `--admin` is never allowed. Low findings that come with an approval are listed as follow-ups instead of being fixed, because a fix after the approval would need a new review. Turn on branch protection with required checks on GitHub if CI should also gate the merge.
 - **No Claude attribution.** The `attribution` settings are empty, and the guard blocks `Co-Authored-By: Claude` and "Generated with Claude Code" in commits and PRs. You are the only author.
 
@@ -185,8 +184,8 @@ So one fixed line in an old module stays a one-line diff, and workers don't spen
 | Before `remi:reviewer` starts | Every worker must be finished. Then `ruff check --fix` + `ruff format` on the whole change, followed by naming → format check → lint → typecheck → tests. If anything is red, the review is refused and the failures go to the workers. |
 | When `remi:reviewer` is launched | Its prompt must be one base-branch line. Explanations, plans and your request are refused, so the code review is blind. |
 | When the request goes to the reviewer (`SendMessage`) | One instruction line plus your messages quoted word for word in `<request>` blocks (your messages are recorded by a `UserPromptSubmit` hook, which skips subagent hand-backs and task notifications; your answers to AskUserQuestion count too, read from the session transcript). Explanations, plans and reworded quotes are refused. |
-| Before `gh pr merge` | the latest review said `APPROVE` and `MATCHES` → every file in HEAD matches the snapshot taken when the code review finished, or matches `main` (brought in by a rebase onto `main`) → `--match-head-commit` is HEAD → no `--admin`; otherwise the merge is refused |
-| Before `git commit` | request check sent to the latest reviewer (if one ran) → secret scan → naming (staged files) → format check → lint → tests; the commit is refused on failure |
+| Before `gh pr merge` (and inside `remi ship`) | the latest review said `APPROVE` and `MATCHES` → every file in HEAD matches the snapshot taken when the code review finished, or matches `main` (brought in by a rebase onto `main`) → `--match-head-commit` is HEAD → no `--admin`; otherwise the merge is refused |
+| Before `git commit` (and inside `remi ship`) | request check sent to the latest reviewer (if one ran) → secret scan → naming (staged files) → format check → lint → tests; the commit is refused on failure |
 
 Tools are found automatically (`.venv/bin`, then `uv run`, then `PATH`, then `uvx ruff`). For a `package.json`-only project, the gate uses the npm scripts `format:check`, `lint`, `typecheck` and `test`. To override per project:
 

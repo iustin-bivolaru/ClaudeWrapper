@@ -1,15 +1,15 @@
 ---
 name: git-ship
-description: Branch, commit, push, pull request and merge under remi - feature branch first, explicit staging, Conventional Commits without Claude attribution, sandbox-safe push and gh calls, a plain PR title and a fact-based PR body with no client data, keeping it current, and the reviewed-commit merge. Use when starting a task on main, or when committing, pushing, opening or editing a PR, or merging.
+description: Branch and ship under remi - feature branch first, then `remi ship` for commit, push, PR and merge. Covers the text you write - a Conventional Commit header without Claude attribution, a plain PR title and a fact-based PR body with no client data, kept current - plus sandbox-safe gh calls and rebasing. Use when starting a task on main, or when shipping, opening or editing a PR, or merging.
 ---
 
-# Ship: branch → commit → push → PR → merge
+# Ship: branch → `remi ship`
 
-Hooks block commits and pushes to protected branches, force pushes, `--no-verify`, `git add -A && git commit` in one command, secret files in the index, non-Conventional commit headers and Claude attribution. Don't work around a block: fix the cause.
+You write the text (commit message, PR title, PR body); `remi ship` does the mechanics in one command: stage, commit gate, commit, push, open or update the PR, and merge when the review allows it. Hooks and `remi ship` block protected branches, force pushes, `--no-verify`, secret files, non-Conventional commit headers and Claude attribution. Don't work around a block: fix the cause.
 
 ## Sandbox rules for git and gh
 - Run every `gh` command, `git push`, `git pull` and `git fetch` **on its own**: no `&&`, no pipe, no `cd x &&`. Chained, they run in the sandbox, can't reach credentials and look logged out. Check `gh auth status` alone before asking the user for `! gh auth login`.
-- No `git push -u` (it writes `.git/config`); `gh pr create --head <branch>` doesn't need tracking.
+- No `git push -u` (it writes `.git/config`).
 - Never create a repository in the session (`git init`, clones). With no repository, tell the user to exit and rerun `remi` in that folder; the launcher creates it.
 
 ## New repository without commits or remote
@@ -23,15 +23,21 @@ git switch -c <type>/<short-kebab-slug>
 ## Branch
 On `main`/`master`/`develop`, `git switch -c <type>/<short-kebab-slug>` (`feat`, `fix`, `refactor`, `chore`, `docs`, `test`, `perf`; add a ticket id if given: `feat/PAY-123-sepa-instant`). If the tree has unrelated changes, tell the user instead of mixing them in.
 
-## Commit
-- Stage explicit paths (`git add path/a.py tests/test_a.py`), check `git diff --cached --stat`, then commit in a separate command. The commit hook runs the secret scan, format, lint and tests on what is staged.
-- `git commit -m "<type>(<scope>): <imperative, lowercase, no period, ≤ 72 chars>" -m "<why>"`. Always `-m` (an editor or `-F` can't be checked). Breaking change: `!` before the colon plus a `BREAKING CHANGE:` paragraph. Tickets as `Refs: PAY-123`.
-- One logical change per commit. No client names, IBANs, account ids or secrets in messages.
+## Ship
+1. Write the PR body (see Pull request) with the Write tool to `.remi-pr.md` at the repository root. It is never committed, and `remi ship` deletes it once the PR is up.
+2. Run, as the whole command (no `cd x &&` in front; no `$`, backticks, `;`, `&`, `|`, `<`, `>` anywhere, because it runs outside the sandbox):
+   ```bash
+   remi ship -m "<type>(<scope>): <imperative, lowercase, no period, ≤ 72 chars>" -m "<why>" --title "<plain PR title>"
+   ```
+3. Read its report: the commit, the PR URL, and `merged` or `left open: <reason>`. If it refuses, fix the cause it names and run it again.
 
-## Push
-- **If the branch already has a PR, check it first:** `gh pr view --json state`. `MERGED`: the push would never reach `main`, so switch to an updated `main`, branch again, cherry-pick your new commits, and open a new PR. `CLOSED`: ask the user.
-- `git push origin HEAD`.
-- Behind or conflicting with `main`: `git fetch origin main` (alone), `git rebase origin/main` (never `-i`), resolve, rerun tests, `git push --force-with-lease origin HEAD`. Files that now match `main` keep their review; a file you changed while resolving needs a new review.
+What it does, so you don't repeat it: stages what you staged (else everything not git-ignored), refuses secret files, runs the commit gate (request check sent, secret scan, format, lint, tests), commits, refuses a branch whose PR was merged or closed, `git push origin HEAD`, `gh pr create` (or `gh pr edit` with the new title and body), then `gh pr merge --merge --delete-branch --match-head-commit <HEAD>` only when the latest review said `VERDICT: APPROVE` and `REQUEST: MATCHES` on exactly this code.
+
+**Commit message:** one logical change; `!` before the colon plus a `BREAKING CHANGE:` paragraph for a breaking change; tickets as `Refs: PAY-123`. No client names, IBANs, account ids or secrets.
+
+**Merged PR:** if `remi ship` says the branch's PR is already merged, switch to an updated `main`, branch again, cherry-pick your new commits, and ship again. `CLOSED`: ask the user.
+
+**Behind or conflicting with `main`:** `git fetch origin main` (alone), `git rebase origin/main` (never `-i`), resolve, rerun tests, `git push --force-with-lease origin HEAD` (alone), then `remi ship` again. Files that now match `main` keep their review; a file you changed while resolving needs a new review.
 
 ## Pull request
 **Gather facts first, don't write from memory:** `git log --reverse --format='- \`%h\` %s' origin/main..HEAD`, `git diff --name-only origin/main...HEAD`, and look for migrations, new `.env.example` keys, changed routes or error codes, permissions, prompts and dependencies. Quote only checks that actually ran (worker reports, gates, the review).
@@ -55,16 +61,10 @@ On `main`/`master`/`develop`, `git switch -c <type>/<short-kebab-slug>` (`feat`,
 - Facts over adjectives: name endpoints, tables, settings and error codes.
 - No real client data (use fakes like `RO00TEST0000000000000000`), no secrets, tokens or internal hostnames. Call out changes to auth, permissions, money movement, PII or sensitive logging.
 - No Claude attribution.
-- Create it with the body in a temp file: `gh pr create --base main --head <branch> --title "<title>" --body-file "$TMPDIR/pr-body.md"`. Never `--fill`; `--draft` only when asked.
-- **Keep it current:** when new commits change what the PR does, rewrite the affected sections with `gh pr edit --body-file`. Describe the PR as it is now, not the review rounds.
+- **Keep it current:** when new commits change what the PR does, rewrite `.remi-pr.md` and run `remi ship` again; it updates the PR's title and body. Describe the PR as it is now, not the review rounds.
 
 ## Merge
-Only when the **latest** review said `VERDICT: APPROVE` and `REQUEST: MATCHES`. Pin it to the reviewed commit, each command alone:
-```bash
-git rev-parse HEAD
-gh pr merge --merge --delete-branch --match-head-commit <full sha>
-```
-`--merge` keeps the Conventional commits on `main`. A fix after approval needs a new review; the merge gate says why it refuses. On a conflict, rebase (see Push) and retry; on any other refusal (checks, branch protection) leave the PR open and report why.
+`remi ship` merges by itself when the **latest** review said `VERDICT: APPROVE` and `REQUEST: MATCHES` and HEAD is exactly what was reviewed. A fix after the approval needs a new review. Don't run `gh pr merge` yourself; if `remi ship` left the PR open, report why.
 
 ## Report
 Branch, commit hashes, PR URL, and merged or why it was left open.

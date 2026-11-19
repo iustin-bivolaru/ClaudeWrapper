@@ -31,6 +31,7 @@ from conventional_commits import commit_header, header_problems  # noqa: E402
 PROTECTED_BRANCHES = frozenset({"main", "master", "develop", "release", "production"})
 SHELL_OPERATORS = frozenset({";", "&", "|"})
 UNSANDBOXED_GIT_COMMANDS = frozenset({"push", "pull", "fetch"})
+SHIP_FORBIDDEN = re.compile(r"[`$;&|<>\n]")
 
 # Shell constructs that dump the environment or read secrets indirectly.
 ENV_DUMP_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = tuple(
@@ -230,6 +231,26 @@ def check_standalone(command: str) -> None:
             )
 
 
+def check_ship(command: str) -> None:
+    """Allow ``remi ship`` only as a bare, standalone command.
+
+    It runs outside the sandbox and finds the session's review state from its
+    environment, so it may not be chained, run with ``VAR=value`` in front, or
+    expand anything: ``$(...)`` in a title would also run unsandboxed.
+
+    Args:
+        command: Raw shell command line.
+    """
+    if not re.search(r"\bremi\s+ship\b", command):
+        return
+    if not re.match(r"\s*remi\s+ship(\s|$)", command) or SHIP_FORBIDDEN.search(command):
+        block(
+            "run `remi ship` as the whole command: nothing in front (no `cd x &&`, no `VAR=value`), and no "
+            "`$`, backticks, `;`, `&`, `|`, `<`, `>` or newlines anywhere in it, not even inside quotes. Keep the "
+            "title and messages plain and put details in the body file. `cd` in a separate call first."
+        )
+
+
 def check_new_repository(command: str) -> None:
     """Refuse creating a repository inside the session.
 
@@ -332,6 +353,7 @@ def check_bash(command: str, cwd: Path) -> None:
         if pattern.search(command):
             block(f"{why}. Ask the user to run it themselves if it is really needed.")
     check_new_repository(command)
+    check_ship(command)
     check_standalone(command)
     check_git_policy(command, cwd)
     check_conventional_commit(command)
