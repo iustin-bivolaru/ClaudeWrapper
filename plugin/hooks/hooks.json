@@ -1,9 +1,9 @@
 {
-  "description": "remi: secret guard, git policy, allowed subagents, quality and merge gates (one dispatcher per event)",
+  "description": "remi: secret guard, git policy, subagent policy, quality, review and merge gates (one dispatcher per event)",
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "Read|Edit|Write|MultiEdit|NotebookEdit|Grep|Glob|Bash|Agent",
+        "matcher": "Read|Edit|Write|MultiEdit|NotebookEdit|Grep|Glob|Bash|Agent|SendMessage",
         "hooks": [
           {
             "type": "command",
@@ -25,13 +25,35 @@
         ]
       }
     ],
+    "SubagentStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/dispatch.py\" subagent-start",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
     "SubagentStop": [
       {
         "hooks": [
           {
             "type": "command",
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/dispatch.py\" subagent-stop",
-            "timeout": 300
+            "timeout": 900
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/dispatch.py\" prompt",
+            "timeout": 15
           }
         ]
       }
