@@ -8,7 +8,7 @@ description: Branch, commit, push, PR and merge workflow (PR text via writing-pr
 Hooks enforce this: commits on `main/master/develop/release/production`, pushes to them, force pushes, `--no-verify`, `git add -A && git commit` in one command, and secret files in the index are all blocked.
 
 ## 0. New project: the launcher creates the repository
-Never create a repository inside the session (`git init`, `git clone`, `gh repo clone`): Claude Code's sandbox only protects a repository that exists when the session starts and locks every write to a `.git` made later, so the first commit fails. The guard refuses them. When the folder has no repository, tell the user to exit and run `remi` again there: the launcher asks, then runs `git init -b main`, the empty `chore: initial commit` and `gh repo create --private --push` before the session starts.
+Never create a repository inside the session (`git init`, `git clone`, `gh repo clone`); the guard refuses them. When the folder has no repository, tell the user to exit and run `remi` again there: the launcher creates it before the session starts.
 
 If the repository exists but has no commits or no GitHub remote yet, finish it yourself, **each command as its own Bash call**:
 ```bash
@@ -16,10 +16,8 @@ git commit --allow-empty -m "chore: initial commit"                       # only
 gh repo create <repo-name> --private --source . --remote origin --push    # only if there's no remote and the user wants one (or wants it shipped)
 git switch -c <type>/<short-kebab-slug>
 ```
-- `gh` runs outside the sandbox only when it stands alone. Chained (`cd x && gh ...`), it can't read its token, so it looks logged out.
-- The guard allows exactly this one commit on `main`: the empty first commit of a repository with no commits. `gh repo create --push` may publish `main` only while it holds just that commit. That gives the feature branch a base for its PR.
-- Never `--public`: the guard refuses public repositories. Use `--private` (or `--internal` for an organisation).
-- `remi` only starts when `gh` is logged in with the `repo` scope, so a failing `gh` command is almost always a chained command running inside the sandbox. Rerun it alone, and check `gh auth status` alone before asking the user for `! gh auth login`.
+- Run every `gh` command on its own. Chained (`cd x && gh ...`), it runs in the sandbox, can't read its token and looks logged out. Rerun it alone, and check `gh auth status` alone before asking the user for `! gh auth login`.
+- Always `--private` (or `--internal` for an organisation). Never `--public`.
 
 ## 1. Start: get onto a feature branch
 ```bash
@@ -99,7 +97,7 @@ git rev-parse HEAD
 gh pr merge --merge --delete-branch --match-head-commit <full sha from above>
 ```
 - Run it on its own, like every `gh` command. `--merge` keeps the Conventional Commit messages in `main`. `--delete-branch` also switches you back to `main`.
-- A hook refuses the merge when the review isn't both `APPROVE` and `MATCHES`, when no review ran (XS), when HEAD holds anything the reviewer didn't see (a fix made after the approval needs a new review, both steps), when `--match-head-commit` isn't HEAD, and always with `--admin`.
+- A fix made after the approval needs a new review (both steps). The merge gate refuses anything else, and its message says why.
 - If GitHub reports a conflict or an out-of-date branch, rebase onto `main` (section 3) and merge again. If it refuses for another reason (failing checks, branch protection), leave the PR open and report why. Don't retry with other flags.
 
 ## 6. Report
