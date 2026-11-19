@@ -15,7 +15,7 @@ ALLOWED_TYPES: Final = ("feat", "fix", "docs", "style", "refactor", "perf", "tes
 """Commit types accepted by the gate (the Angular/commitlint convention set)."""
 
 MAX_HEADER_LENGTH: Final = 100
-"""Hard limit for the header line (the commitlint default). The git-ship skill recommends ≤ 72."""
+"""Hard limit for the header line (the commitlint default). The git-ship skill asks for ≤ 72."""
 
 HEADER_PATTERN: Final = re.compile(
     r"^(?P<type>[a-z]+)(?:\((?P<scope>[a-z0-9][a-z0-9._/-]*)\))?(?P<breaking>!)?: (?P<description>\S.*)$"
