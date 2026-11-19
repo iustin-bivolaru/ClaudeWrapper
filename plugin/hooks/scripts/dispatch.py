@@ -7,10 +7,14 @@ plain Read or ``ls`` stays cheap.
 
 Events:
 
-* ``pre-tool``      - PreToolUse: the guard (secrets, git policy, allowed subagents), the
-                      CLAUDE.md limit, and for Bash the commit gate and the merge gate.
-* ``post-tool``     - PostToolUse on Edit/Write: fix, format and lint the file.
-* ``subagent-stop`` - SubagentStop: record a reviewer's verdict for the merge gate.
+* ``pre-tool``       - PreToolUse: the secret and git guard, the CLAUDE.md limit, and,
+                       per tool, the commit gate and merge gate (Bash), the agent
+                       policy and pre-review gate (Agent), the reviewer message check
+                       (SendMessage).
+* ``post-tool``      - PostToolUse on Edit/Write: fix, format and lint the file.
+* ``subagent-start`` - SubagentStart: turn a worker's reservation into a slot.
+* ``subagent-stop``  - SubagentStop: the worker gate, or record a reviewer's verdict.
+* ``prompt``         - UserPromptSubmit: record the user's message for the request check.
 
 A malformed payload blocks a PreToolUse call (fail closed) and is ignored elsewhere.
 """
@@ -37,9 +41,18 @@ def pre_tool(payload: dict[str, Any]) -> int:
     Returns:
         0 to allow; a blocking check exits with 2 itself.
     """
-    import guard
-
     tool = str(payload.get("tool_name", ""))
+    if tool == "Agent":
+        import agent_policy
+        import quality
+
+        return agent_policy.on_pre(payload) or quality.on_review(payload)
+    if tool == "SendMessage":
+        import agent_policy
+
+        return agent_policy.on_message(payload)
+
+    import guard
 
     guard.check(payload)
     if tool in FILE_WRITE_TOOLS or tool == "Bash":
@@ -70,26 +83,54 @@ def post_tool(payload: dict[str, Any]) -> int:
     return quality.on_edit(payload)
 
 
+def subagent_start(payload: dict[str, Any]) -> int:
+    """Register a starting subagent.
+
+    Args:
+        payload: SubagentStart payload.
+
+    Returns:
+        Always 0.
+    """
+    import agent_policy
+
+    return agent_policy.on_start(payload)
+
+
 def subagent_stop(payload: dict[str, Any]) -> int:
-    """Record a stopping reviewer's verdict and the files it saw, for the merge gate.
+    """Gate a stopping worker, or record a stopping reviewer's verdict.
 
     Args:
         payload: SubagentStop payload.
 
     Returns:
+        2 to keep a worker going, else 0.
+    """
+    import quality
+
+    return quality.on_worker_stop(payload)
+
+
+def prompt(payload: dict[str, Any]) -> int:
+    """Record the user's message.
+
+    Args:
+        payload: UserPromptSubmit payload.
+
+    Returns:
         Always 0.
     """
-    if str(payload.get("agent_type", "")).endswith("reviewer"):
-        import merge_gate
+    import agent_policy
 
-        merge_gate.record_review(payload)
-    return ALLOW
+    return agent_policy.on_prompt(payload)
 
 
 EVENTS = {
     "pre-tool": pre_tool,
     "post-tool": post_tool,
+    "subagent-start": subagent_start,
     "subagent-stop": subagent_stop,
+    "prompt": prompt,
 }
 
 
