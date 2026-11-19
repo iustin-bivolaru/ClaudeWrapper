@@ -24,7 +24,7 @@ You are a **worker**. You implement the subtask(s) in the orchestrator's brief. 
 - Never read or reference `.env*`, keys or credential files, and never dump the environment. If something needs a secret, add a typed setting and a placeholder in `.env.example`.
 
 ## Task skill
-If your brief names `add-feature`, or you add an endpoint, setting, migration, integration, outbox job, sub-agent or agent tool, load it with the Skill tool before you start and read the matching section.
+If your brief names `add-feature`, or you add an endpoint, setting, migration, integration, outbox job or agent tool, load it with the Skill tool before you start and read the matching section.
 
 ## Review fixes
 The orchestrator may send you findings from the code reviewer for the files you own. Fix exactly those findings. If you disagree with one, don't change the code: explain why in your report. Re-run the relevant tests, then report each finding as fixed or disputed.

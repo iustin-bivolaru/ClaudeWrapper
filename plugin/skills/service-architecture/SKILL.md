@@ -83,7 +83,7 @@ Rules:
 | Something periodic | scheduler job that only enqueues outbox rows |
 | A tunable, secret, URL, flag | settings group |
 | A user-facing failure | a new code in the error catalogue |
-| LLM reasoning over a chat turn | an agent (see `agent-orchestration-architecture`) |
+| LLM reasoning over a chat turn | an agent, with tools that call services or integrations |
 
 ## Composition root
 
