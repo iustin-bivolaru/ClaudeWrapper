@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this repo is
 
-remi is a wrapper around Claude Code (`bin/remi` execs `claude`) for client work in banking/finance. It is **not** an application: it ships a Claude Code plugin (`plugin/`), hardened settings (`settings/settings.json`) and a launcher. Most changes are to agent prompts (Markdown), skills (Markdown) or hook scripts (Python). README.md is the user-facing spec. Keep it in sync when behaviour changes.
+remi is a wrapper around Claude Code (`bin/remi` execs `claude`). It is **not** an application: it ships a Claude Code plugin (`plugin/`), hardened settings (`settings/settings.json`) and a launcher. Most changes are to agent prompts (Markdown), skills (Markdown) or hook scripts (Python). README.md is the user-facing spec. Keep it in sync when behaviour changes.
 
 ## Commands
 

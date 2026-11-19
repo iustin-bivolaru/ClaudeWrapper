@@ -1,6 +1,6 @@
 # remi
 
-A cost-aware, security-hardened layer over Claude Code for client work in banking and finance.
+A cost-aware, security-hardened layer over Claude Code: Opus plans, Sonnet workers build, a blind Opus reviewer checks the code and then your request, and remi ships the PR itself.
 `remi` is plain `claude` underneath, so every flag, slash command and subcommand still works. On top, it adds:
 
 | Piece | What it does |
@@ -12,7 +12,7 @@ A cost-aware, security-hardened layer over Claude Code for client work in bankin
 | **Architecture skill** (loaded on demand by the orchestrator and reviewer) | `service-architecture` (package layout with one package per layer and one module per resource, layers, composition root, transactions, errors, outbox, plus a review checklist). |
 | **Task skill** (loaded on demand) | `add-feature`: short checklists of the easy-to-miss pieces when adding an endpoint, setting, migration, integration, outbox job or agent tool. |
 | **pyright-lsp** (official plugin, enabled in `settings.json`) | Type errors after every edit and an `LSP` tool for definitions and references. Workers and the reviewer get the tool; workers also run `pyright` on their files before reporting, because diagnostics only reach the main session. |
-| **Hooks** | Secret guard, git policy, subagent cost policy, per-edit format and lint, and a quality gate before every commit and at the end of each worker run. |
+| **Hooks** | Secret guard, git policy, subagent cost policy, quality gates when a worker finishes, before the review and before every commit, and a merge gate. |
 | **Sandbox** | Bash runs in the OS sandbox. Secret files are unreadable, network goes through an allowlist, and nothing can escape to unsandboxed mode. |
 
 ## Install
@@ -39,7 +39,7 @@ Interactive sessions start with the remi hamster (set `REMI_NO_BANNER=1` to hide
 ```
 
 ```bash
-cd ~/work/some-client-repo
+cd ~/work/some-repo
 remi                           # interactive, orchestrator on Opus
 remi -c                        # continue the last session
 remi -p "fix the failing test in tests/test_fx.py"
@@ -149,7 +149,7 @@ you: task ─▶ orchestrator: feature branch
 
 ## Security layers (defence in depth)
 
-1. **Prompts.** Every agent is told never to touch secrets or real client data.
+1. **Prompts.** Every agent is told never to touch secrets or real personal data.
 2. **Permission deny rules** (`settings/settings.json`). The Read and Edit tools are denied on `.env`, `.env.local`, `.env.prod*`, …, `*.pem`/`*.key`/`*.p12`/`*.jks`, `~/.ssh`, `~/.aws`, kube, docker and npm/pypi credentials, and similar files.
 3. **PreToolUse guard** (`plugin/hooks/scripts/guard.py`). Covers Read, Edit, Write, Grep, Glob and Bash. It blocks secret paths, environment dumps (`printenv`, `env`, `/proc/*/environ`, `os.environ` in inline Python, keychain and vault reads), `sudo`, `curl | sh`, `git reset --hard`, `git clean -f`, history rewrites, and force pushes. It fails closed. `.env.example` and other template files stay readable.
 4. **OS sandbox.** It denies reads of the same secret files to every Bash process, so `grep -r` and scripts can't get at them either. Network access is limited to an allowlist (PyPI, GitHub, npm, astral). Commands may listen on localhost ports (`allowLocalBinding`, macOS only) so tests and dev servers can run; this opens no route to the internet. `allowUnsandboxedCommands: false` and `failIfUnavailable: true` are set. Only `git push/pull/fetch` and `gh` run outside the sandbox, because they need your credentials. The guard still checks them, and refuses them inside a chain or pipe (`cd x && gh …`), because a chained command runs sandboxed: `gh` then can't read its token from the keychain and looks logged out. `gh repo create` is allowed, but the guard refuses public repositories (`--public`, `--visibility public`).
