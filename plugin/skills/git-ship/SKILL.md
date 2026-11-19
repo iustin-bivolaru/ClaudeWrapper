@@ -1,104 +1,70 @@
 ---
 name: git-ship
-description: Branch, commit, push, PR and merge workflow (PR text via writing-prs) - create a feature branch before editing, stage explicit paths, conventional commit messages without any Claude attribution, push the branch (never protected branches, never force), open a pull request with gh. Use when starting a task on main or when committing, pushing or opening a PR.
+description: Branch, commit, push, pull request and merge under remi - feature branch first, explicit staging, Conventional Commits without Claude attribution, sandbox-safe push and gh calls, a plain PR title and a fact-based PR body with no client data, keeping it current, and the reviewed-commit merge. Use when starting a task on main, or when committing, pushing, opening or editing a PR, or merging.
 ---
 
-# Branch → commit → push
+# Ship: branch → commit → push → PR → merge
 
-Hooks enforce this: commits on `main/master/develop/release/production`, pushes to them, force pushes, `--no-verify`, `git add -A && git commit` in one command, and secret files in the index are all blocked.
+Hooks block commits and pushes to protected branches, force pushes, `--no-verify`, `git add -A && git commit` in one command, secret files in the index, non-Conventional commit headers and Claude attribution. Don't work around a block: fix the cause.
 
-## 0. New project: the launcher creates the repository
-Never create a repository inside the session (`git init`, `git clone`, `gh repo clone`); the guard refuses them. When the folder has no repository, tell the user to exit and run `remi` again there: the launcher creates it before the session starts.
+## Sandbox rules for git and gh
+- Run every `gh` command, `git push`, `git pull` and `git fetch` **on its own**: no `&&`, no pipe, no `cd x &&`. Chained, they run in the sandbox, can't reach credentials and look logged out. Check `gh auth status` alone before asking the user for `! gh auth login`.
+- No `git push -u` (it writes `.git/config`); `gh pr create --head <branch>` doesn't need tracking.
+- Never create a repository in the session (`git init`, clones). With no repository, tell the user to exit and rerun `remi` in that folder; the launcher creates it.
 
-If the repository exists but has no commits or no GitHub remote yet, finish it yourself, **each command as its own Bash call**:
+## New repository without commits or remote
+Each command as its own call:
 ```bash
 git commit --allow-empty -m "chore: initial commit"                       # only if HEAD has no commits
-gh repo create <repo-name> --private --source . --remote origin --push    # only if there's no remote and the user wants one (or wants it shipped)
+gh repo create <repo-name> --private --source . --remote origin --push    # only if there's no remote; never --public
 git switch -c <type>/<short-kebab-slug>
 ```
-- Run every `gh` command on its own. Chained (`cd x && gh ...`), it runs in the sandbox, can't read its token and looks logged out. Rerun it alone, and check `gh auth status` alone before asking the user for `! gh auth login`.
-- Always `--private` (or `--internal` for an organisation). Never `--public`.
 
-## 1. Start: get onto a feature branch
-```bash
-git status --short && git branch --show-current
-git switch -c <type>/<short-kebab-slug>   # only if on a protected branch
+## Branch
+On `main`/`master`/`develop`, `git switch -c <type>/<short-kebab-slug>` (`feat`, `fix`, `refactor`, `chore`, `docs`, `test`, `perf`; add a ticket id if given: `feat/PAY-123-sepa-instant`). If the tree has unrelated changes, tell the user instead of mixing them in.
+
+## Commit
+- Stage explicit paths (`git add path/a.py tests/test_a.py`), check `git diff --cached --stat`, then commit in a separate command. The commit hook runs the secret scan, format, lint and tests on what is staged.
+- `git commit -m "<type>(<scope>): <imperative, lowercase, no period, ≤ 72 chars>" -m "<why>"`. Always `-m` (an editor or `-F` can't be checked). Breaking change: `!` before the colon plus a `BREAKING CHANGE:` paragraph. Tickets as `Refs: PAY-123`.
+- One logical change per commit. No client names, IBANs, account ids or secrets in messages.
+
+## Push
+- **If the branch already has a PR, check it first:** `gh pr view --json state`. `MERGED`: the push would never reach `main`, so switch to an updated `main`, branch again, cherry-pick your new commits, and open a new PR. `CLOSED`: ask the user.
+- `git push origin HEAD`.
+- Behind or conflicting with `main`: `git fetch origin main` (alone), `git rebase origin/main` (never `-i`), resolve, rerun tests, `git push --force-with-lease origin HEAD`. Files that now match `main` keep their review; a file you changed while resolving needs a new review.
+
+## Pull request
+**Gather facts first, don't write from memory:** `git log --reverse --format='- \`%h\` %s' origin/main..HEAD`, `git diff --name-only origin/main...HEAD`, and look for migrations, new `.env.example` keys, changed routes or error codes, permissions, prompts and dependencies. Quote only checks that actually ran (worker reports, gates, the review).
+
+**Title:** a plain imperative sentence about the outcome, ≤ 60 chars, never a `type(scope):` header or a file list: `Add SEPA instant payments to transfers`, `Fix rounding in long account statements`. Add `(breaking)` or a ticket id at the end when relevant.
+
+**Body:** keep only the sections that apply, short enough to read in two minutes.
+```markdown
+## What
+<the outcome for users or callers, 1–3 sentences, plus key changes>
+## Why
+<the problem; Refs: PAY-123>
+## How it was verified
+- `uv run pytest -q`: 214 passed
+- Review: <verdict; findings fixed or disputed>. Request check: <MATCHES, or gaps>
+## Risk and rollout
+- Risk: low | medium | high, and why. Migration: <revision, reversible?>. Config: new keys `FOO__BAR` (set before deploying). Rollback: <how>
+## Commits
+- `abc1234` feat(x): …
 ```
-Types: `feat`, `fix`, `refactor`, `chore`, `docs`, `test`, `perf`. Include a ticket id when the user gave one: `feat/PAY-123-sepa-instant`.
-If the working tree already has unrelated changes, tell the user instead of mixing them in.
+- Facts over adjectives: name endpoints, tables, settings and error codes.
+- No real client data (use fakes like `RO00TEST0000000000000000`), no secrets, tokens or internal hostnames. Call out changes to auth, permissions, money movement, PII or sensitive logging.
+- No Claude attribution.
+- Create it with the body in a temp file: `gh pr create --base main --head <branch> --title "<title>" --body-file "$TMPDIR/pr-body.md"`. Never `--fill`; `--draft` only when asked.
+- **Keep it current:** when new commits change what the PR does, rewrite the affected sections with `gh pr edit --body-file`. Describe the PR as it is now, not the review rounds.
 
-## 2. Commit (after the reviewer approved and checked the change against the request)
-Stage **explicit paths** — never `git add -A`/`git add .` blindly:
-```bash
-git status --short
-git add path/one.py path/two.py tests/test_two.py
-git diff --cached --stat
-```
-Then commit in a **separate** command (the commit hook runs the secret scan, format check, lint and tests on exactly what is staged):
-```bash
-git commit -m "<type>(<scope>): <imperative summary, ≤ 72 chars>" -m "<why, and anything notable>"
-```
-
-### Conventional Commits (enforced by a hook)
-The header is `<type>(<scope>)!: <description>`. The guard refuses any commit message that doesn't match. PR titles are plain sentences instead (see `writing-prs`).
-
-| Type | Use for |
-|---|---|
-| `feat` | a new capability for users or callers |
-| `fix` | a bug fix |
-| `refactor` | a code change that neither fixes a bug nor adds a feature |
-| `perf` | a performance improvement |
-| `test` | adding or fixing tests only |
-| `docs` | documentation only |
-| `build` | the build system, dependencies, packaging |
-| `ci` | CI configuration |
-| `chore` | maintenance that touches no `src` or test code |
-| `style` | formatting only (rare: the formatter runs before review and commit) |
-| `revert` | reverts an earlier commit (name it in the body) |
-
-- **Scope** is optional, lowercase, and names the area: `feat(payments): …`, `fix(fx-rates): …`, `chore(deps): …`.
-- **Breaking change**: put `!` before the colon (`feat(api)!: drop the v1 statements endpoint`) and add a `BREAKING CHANGE: <what callers must do>` paragraph to the body.
-- **Description**: imperative mood, lowercase start, no trailing period, ≤ 72 characters for the whole header (hard limit 100).
-- **Body** (a second `-m`): explain *why*, not what the diff already shows. Reference tickets as `Refs: PAY-123`.
-- Always pass the message with `-m`. An editor or `-F file` can't be checked, so the hook refuses them.
-- When squash-merging, make the squash commit title a Conventional header too. GitHub suggests the plain PR title.
-
-Examples:
-```bash
-git commit -m "feat(transfers): add SEPA instant payments" -m "Clients asked for same-second settlement. Refs: PAY-412"
-git commit -m "fix(statements): use Decimal for running balances" -m "Float rounding drifted by a cent on long statements."
-git commit -m "chore(deps): bump httpx to 0.28"
-```
-
-- One logical change per commit; split if the diff mixes concerns.
-- No client names, IBANs, account ids or secrets in messages.
-- **No Claude attribution**: no `Co-Authored-By: Claude …` trailer, no "Generated with Claude Code" line. The user is the only author (a hook blocks it).
-- If the hook refuses the commit: read its output, fix the cause (delegate to a worker if non-trivial), re-stage, commit again. Never bypass it.
-
-## 3. Push
-```bash
-git push origin HEAD
-```
-- **If the branch already has a PR, check it's still open first:** `gh pr view --json state`. If it says `MERGED`, the push would land on a dead branch and never reach `main`. Instead, `git switch main`, `git pull --rebase origin main`, create a new branch, move your new commits onto it (`git cherry-pick <hash>`), push that, and open a new PR. If it says `CLOSED`, ask the user.
-- Run it **on its own**: no `&&`, no pipe (`| tail`), no `-u`. The same goes for every `gh` command: `cd` in a separate call first. A bare `git push` runs outside the sandbox with your credentials. Chained or piped commands, and `-u` (which writes `.git/config`), get blocked by the sandbox.
-- `gh pr create` uses `--head` explicitly, so the branch doesn't need upstream tracking.
-If the remote has diverged on your own branch: `git pull --rebase origin <branch>`, rerun tests, push again (`--force-with-lease` only on your own feature branch, and only after a rebase you did).
-
-**Bring the branch up to date with `main`** when GitHub reports a conflict or the branch is behind: `git fetch origin main` (on its own), then `git rebase origin/main`. Resolve conflicts, `git add` the files, `git rebase --continue` (never `-i`: there is no editor). Rerun the tests, then `git push --force-with-lease origin HEAD`. The merge gate accepts files that now match `main`; a file you changed while resolving a conflict needs a new review.
-
-## 4. Open or update the pull request
-Load the **`writing-prs`** skill. It covers gathering the facts, the title, the body template, the security rules, and `gh pr create --body-file`.
-- If a PR already exists for the branch (`gh pr view`), pushing updates its commits. Also update its description when what the PR does has changed (`writing-prs`, step 5).
-
-## 5. Merge (only after an approving, matching review)
-remi merges its own PR when the **latest** review said `VERDICT: APPROVE` and `REQUEST: MATCHES`. Pin the merge to the commit that was reviewed:
+## Merge
+Only when the **latest** review said `VERDICT: APPROVE` and `REQUEST: MATCHES`. Pin it to the reviewed commit, each command alone:
 ```bash
 git rev-parse HEAD
-gh pr merge --merge --delete-branch --match-head-commit <full sha from above>
+gh pr merge --merge --delete-branch --match-head-commit <full sha>
 ```
-- Run it on its own, like every `gh` command. `--merge` keeps the Conventional Commit messages in `main`. `--delete-branch` also switches you back to `main`.
-- A fix made after the approval needs a new review (both steps). The merge gate refuses anything else, and its message says why.
-- If GitHub reports a conflict or an out-of-date branch, rebase onto `main` (section 3) and merge again. If it refuses for another reason (failing checks, branch protection), leave the PR open and report why. Don't retry with other flags.
+`--merge` keeps the Conventional commits on `main`. A fix after approval needs a new review; the merge gate says why it refuses. On a conflict, rebase (see Push) and retry; on any other refusal (checks, branch protection) leave the PR open and report why.
 
-## 6. Report
-The branch name, the commit hash(es) (`git log --oneline -n 3`), the PR URL, and whether it was merged or why it was left open.
+## Report
+Branch, commit hashes, PR URL, and merged or why it was left open.
