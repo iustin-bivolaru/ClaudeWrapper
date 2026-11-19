@@ -275,15 +275,33 @@ def check_claude_md(root: Path, report: Report) -> None:
     report.section("CLAUDE.md")
     _, listing = git(root, "ls-files", "--cached", "--others", "--exclude-standard")
     found = [name for name in listing.splitlines() if re.search(r"(^|/)CLAUDE(\.local)?\.md$", name)]
-    if not found:
+    # Claude Code loads a git-ignored CLAUDE.md too, so it counts, but a commit can't carry it.
+    _, ignored_listing = git(
+        root,
+        "ls-files",
+        "--others",
+        "--ignored",
+        "--exclude-standard",
+        "--",
+        ":(glob)**/CLAUDE.md",
+        ":(glob)**/CLAUDE.local.md",
+    )
+    ignored = set(ignored_listing.splitlines())
+    if not found and not ignored:
         report.add(WARN, "no CLAUDE.md yet: the onboarding session below writes one")
         return
-    for name in found:
+    for name in found + sorted(ignored):
         lines = count_lines((root / name).read_text(errors="replace"))
         if lines > max_lines():
             report.add(FAIL, f"{name}: {lines} lines (limit {max_lines()}): remi refuses edits until it's shortened")
         else:
             report.add(OK, f"{name}: {lines} lines")
+        if name in ignored and not name.endswith("CLAUDE.local.md"):
+            report.add(
+                WARN,
+                f"{name} is git-ignored: Claude loads it, but a commit can't carry it (edit it locally)",
+                finding=True,
+            )
 
 
 def remi_skill_names() -> set[str]:
