@@ -36,6 +36,9 @@ case "${1:-}" in
   onboard)  # remi's own read-only readiness report for an existing project
     shift
     exec python3 "$REMI_HOME/plugin/hooks/scripts/onboard.py" "$@" ;;
+  ship)  # commit, push, PR and merge for the orchestrator (in a session; gated like the hooks)
+    shift
+    exec python3 "$REMI_HOME/plugin/hooks/scripts/ship.py" "$@" ;;
 esac
 
 # --- configuration -------------------------------------------------------------
@@ -224,5 +227,9 @@ if [ -t 1 ] && [ "$is_print_mode" = false ] && [ -z "${REMI_NO_BANNER:-}" ]; the
   ▘▘ ▝▝    ${start_mode:+mode ${start_mode} · }shift+tab cycles modes (plan · accept edits · default)
 BANNER
 fi
+
+# Hooks and `remi ship` (a Bash command) must find the same per-session state, so pin it now.
+export REMI_STATE_DIR="${REMI_STATE_DIR:-${TMPDIR:-/tmp}/remi}"
+export PATH="$REMI_HOME/bin:$PATH"   # `remi ship` resolves in the session even if remi isn't installed
 
 exec claude "${wrapper_args[@]}" "$@"

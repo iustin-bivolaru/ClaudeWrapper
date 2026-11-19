@@ -799,6 +799,20 @@ def on_commit(payload: dict[str, Any]) -> int:
             "stage files in a separate command first (git add <paths>), then run `git commit` "
             "alone, so the gate checks exactly what will be committed. Do not use `commit -a`."
         )
+    return gate_staged_commit(payload)
+
+
+def gate_staged_commit(payload: dict[str, Any]) -> int:
+    """Run the commit gate on what is staged: request check, CLAUDE.md, secret scan, then the full gate.
+
+    Shared by the ``git commit`` hook and ``remi ship``, which commits inside its own process.
+
+    Args:
+        payload: Payload with the session id and the working directory.
+
+    Returns:
+        0 when the commit may go ahead (blocking exits with 2 inside ``block``).
+    """
     waiting_reviewer = request_check_due(payload)
     if waiting_reviewer:
         block(

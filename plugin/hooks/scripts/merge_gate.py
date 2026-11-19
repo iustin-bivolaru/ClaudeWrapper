@@ -256,17 +256,41 @@ def check_merge(payload: dict[str, Any]) -> int:
         return ALLOW
     if re.search(r"\s--admin\b", command):
         block("`gh pr merge --admin` bypasses branch protection. remi never uses it.")
+    head, reason = reviewed_head(payload)
+    if reason:
+        block(reason)
+    pinned = re.search(r"--match-head-commit[=\s]+([0-9a-f]{40})\b", command)
+    if not pinned or pinned.group(1) != head:
+        block(
+            f"pin the merge to the reviewed commit: add `--match-head-commit {head}`, so GitHub refuses the merge "
+            "if the PR head differs from what was reviewed and committed here."
+        )
+    return ALLOW
+
+
+def reviewed_head(payload: dict[str, Any]) -> tuple[str, str]:
+    """Check HEAD against the latest review.
+
+    Shared by the ``gh pr merge`` hook and ``remi ship``, which merges inside its own process.
+
+    Args:
+        payload: Payload with the session id and the working directory.
+
+    Returns:
+        ``(full HEAD sha, "")`` when the merge may go ahead, else ``("", reason)``.
+    """
     state = _load_state(payload)
     reviewer = latest_reviewer(payload)
     if not reviewer or state.get("reviewer") != reviewer:
-        block(
-            "no finished review covers this change, so remi doesn't merge it. Merging needs the latest reviewer's "
-            "VERDICT: APPROVE and REQUEST: MATCHES. Leave the PR open for the user."
+        return "", (
+            "no finished review covers this change, so remi doesn't merge it. Merging needs the latest "
+            "reviewer's VERDICT: APPROVE and REQUEST: MATCHES. Leave the PR open for the user."
         )
     if state.get("verdict") != "APPROVE" or state.get("request") != "MATCHES":
-        block(
-            f"the latest review said VERDICT: {state.get('verdict', 'none')}, REQUEST: {state.get('request', 'none')}. "
-            "remi merges only after VERDICT: APPROVE and REQUEST: MATCHES. Leave the PR open and tell the user why."
+        return "", (
+            f"the latest review said VERDICT: {state.get('verdict', 'none')}, "
+            f"REQUEST: {state.get('request', 'none')}. remi merges only after VERDICT: APPROVE and REQUEST: MATCHES. "
+            "Leave the PR open and tell the user why."
         )
     root = project_dir(payload)
     try:
@@ -274,21 +298,15 @@ def check_merge(payload: dict[str, Any]) -> int:
         committed = head_tree(root)
         base = base_tree(root)
     except (RuntimeError, OSError, subprocess.SubprocessError) as error:
-        block(f"can't read HEAD to check it against the review: {error}")
-    pinned = re.search(r"--match-head-commit[=\s]+([0-9a-f]{40})\b", command)
-    if not pinned or pinned.group(1) != head:
-        block(
-            f"pin the merge to the reviewed commit: add `--match-head-commit {head}`, so GitHub refuses the merge "
-            "if the PR head differs from what was reviewed and committed here."
-        )
+        return "", f"can't read HEAD to check it against the review: {error}"
     snapshot = state.get("snapshot")
     if not isinstance(snapshot, dict):
-        block("the review didn't record which files it saw, so the merge can't be checked. Leave the PR open.")
+        return "", "the review didn't record which files it saw, so the merge can't be checked. Leave the PR open."
     unreviewed = unreviewed_paths(snapshot, state.get("tracked") or [], committed, base)
     if unreviewed:
         listed = ", ".join(unreviewed[:MAX_LISTED_PATHS]) + (" …" if len(unreviewed) > MAX_LISTED_PATHS else "")
-        block(
-            f"HEAD differs from what the reviewer approved ({listed}). Changes after an approval need a new review "
-            "(both steps) before remi merges."
+        return "", (
+            f"HEAD differs from what the reviewer approved ({listed}). Changes after an approval need a new "
+            "review (both steps) before remi merges."
         )
-    return ALLOW
+    return head, ""
