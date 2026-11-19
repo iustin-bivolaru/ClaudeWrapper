@@ -26,7 +26,7 @@ brew install gitleaks        # optional: stronger secret scan at commit time
 ```
 Requires `claude`, `python3` (3.11+), and `uv` or `ruff`/`pytest` available in the target project.
 
-**GitHub is required.** remi creates repos, commits, pushes and opens PRs itself, so `remi` refuses to start unless `gh` is logged in to github.com with a token that has the `repo` scope. If it isn't, the launcher tells you exactly what to run (`gh auth login -h github.com`, or `gh auth refresh -h github.com -s repo`). `remi onboard` reports the same problem as a failure. The permission allow list already covers `git init`, `git commit`, `git push`, `git pull`, `git rebase`, `git merge`, `git cherry-pick`, `gh repo create` (private only), `gh pr create/edit` and `gh pr merge` (still behind the merge gate), so none of them prompt.
+**GitHub is required.** remi creates repos, commits, pushes and opens PRs itself, so `remi` refuses to start unless `gh` is logged in to github.com with a token that has the `repo` scope. If it isn't, the launcher tells you exactly what to run (`gh auth login -h github.com`, or `gh auth refresh -h github.com -s repo`). `remi onboard` reports the same problem as a failure. The permission allow list already covers `git commit`, `git push`, `git pull`, `git rebase`, `git merge`, `git cherry-pick`, `gh repo create` (private only), `gh pr create/edit` and `gh pr merge` (still behind the merge gate), so none of them prompt.
 
 ## Use
 
@@ -95,7 +95,7 @@ Start in a mode with `remi --plan`, `remi --permission-mode acceptEdits`, or `RE
 | Reviewer | `REMI_REVIEWER_MODEL` = `opus` | `REMI_REVIEWER_EFFORT` = `medium` | |
 | Explorer | `REMI_EXPLORER_MODEL` = `haiku` | `REMI_EXPLORER_EFFORT` = `low` | |
 
-Turn limits per agent: `REMI_WORKER_MAX_TURNS` (`50`), `REMI_REVIEWER_MAX_TURNS` (`25`) and `REMI_EXPLORER_MAX_TURNS` (`15`). The orchestrator has none: you drive the main session. Plus `REMI_MAX_WORKERS` (`3`), `REMI_PERMISSION_MODE` (starting mode) and `REMI_NO_BANNER`. Effort is one of `low`, `medium`, `high`, `xhigh` or `max`. Precedence is **CLI flag > environment > config file > default**. To make a setting persistent, put it in `~/.config/remi/config`:
+Turn limits per agent: `REMI_WORKER_MAX_TURNS` (`50`), `REMI_REVIEWER_MAX_TURNS` (`25`) and `REMI_EXPLORER_MAX_TURNS` (`15`). The orchestrator has none: you drive the main session. Plus `REMI_MAX_WORKERS` (`3`), `REMI_PERMISSION_MODE` (starting mode), `REMI_NEW_REPO` (`ask`; see *New projects ship too*) and `REMI_NO_BANNER`. Effort is one of `low`, `medium`, `high`, `xhigh` or `max`. Precedence is **CLI flag > environment > config file > default**. To make a setting persistent, put it in `~/.config/remi/config`:
 
 ```ini
 # ~/.config/remi/config  (only REMI_* keys are read; the file is parsed, never executed)
@@ -110,8 +110,10 @@ Agent frontmatter is static, so `remi` writes a copy of the plugin with the work
 ```
 remi launch: gh logged in with the `repo` scope? no ⇒ refuses to start
              ▼
-you: task ─▶ orchestrator: new project? git init · empty first commit on main ·
-             │             private GitHub repo (gh repo create --push) · feature branch
+             no git repo here? asks, then git init · empty first commit on main ·
+             private GitHub repo (gh repo create --push) · then starts the session
+             ▼
+you: task ─▶ orchestrator: feature branch
              │  size it (XS/S/M/L; a new project is at least M), plan, worker map
              │  (M/L: waits for you to approve the worker map)
              │
@@ -152,14 +154,14 @@ you: task ─▶ orchestrator: new project? git init · empty first commit on ma
 1. **Prompts.** Every agent is told never to touch secrets or real client data.
 2. **Permission deny rules** (`settings/settings.json`). The Read and Edit tools are denied on `.env`, `.env.local`, `.env.prod*`, …, `*.pem`/`*.key`/`*.p12`/`*.jks`, `~/.ssh`, `~/.aws`, kube, docker and npm/pypi credentials, and similar files.
 3. **PreToolUse guard** (`plugin/hooks/scripts/guard.py`). Covers Read, Edit, Write, Grep, Glob and Bash. It blocks secret paths, environment dumps (`printenv`, `env`, `/proc/*/environ`, `os.environ` in inline Python, keychain and vault reads), `sudo`, `curl | sh`, `git reset --hard`, `git clean -f`, history rewrites, and force pushes. It fails closed. `.env.example` and other template files stay readable.
-4. **OS sandbox.** It denies reads of the same secret files to every Bash process, so `grep -r` and scripts can't get at them either. Network access is limited to an allowlist (PyPI, GitHub, npm, astral). Commands may listen on localhost ports (`allowLocalBinding`, macOS only) so tests and dev servers can run; this opens no route to the internet. `allowUnsandboxedCommands: false` and `failIfUnavailable: true` are set. Only `git push/pull/fetch`, `git init` and `gh` run outside the sandbox: the first three need your credentials, and `git init` must write `.git/config`. The guard still checks them, and refuses them inside a chain or pipe (`cd x && gh …`), because a chained command runs sandboxed: `gh` then can't read its token from the keychain and looks logged out. `gh repo create` is allowed, but the guard refuses public repositories (`--public`, `--visibility public`).
+4. **OS sandbox.** It denies reads of the same secret files to every Bash process, so `grep -r` and scripts can't get at them either. Network access is limited to an allowlist (PyPI, GitHub, npm, astral). Commands may listen on localhost ports (`allowLocalBinding`, macOS only) so tests and dev servers can run; this opens no route to the internet. `allowUnsandboxedCommands: false` and `failIfUnavailable: true` are set. Only `git push/pull/fetch` and `gh` run outside the sandbox, because they need your credentials. The guard still checks them, and refuses them inside a chain or pipe (`cd x && gh …`), because a chained command runs sandboxed: `gh` then can't read its token from the keychain and looks logged out. `gh repo create` is allowed, but the guard refuses public repositories (`--public`, `--visibility public`).
 5. **Commit gate.** Before any `git commit`, it scans the staged diff for private keys, AWS, GitHub, Slack and API tokens, JWTs, hard-coded passwords, DB URLs that contain a password, **IBANs**, and **Luhn-valid card numbers**, plus gitleaks if it is installed. A deliberate test fixture can be allowed with `# remi: allow-secret` on that line.
 6. **`bypassPermissions` mode is disabled.**
 
 ## Git workflow (enforced)
 
 - No commits on `main`/`master`/`develop`/`release`/`production`. The agent creates `feat/…`, `fix/…` and similar branches.
-- **New projects ship too.** In a folder with no repository, remi runs `git init -b main`, makes one empty `chore: initial commit` on `main`, creates the private GitHub repo with `gh repo create --private --source . --push` (if you asked for a repo or for it to be shipped), then works on a feature branch and opens the PR against `main`. The guard allows only that one empty commit on `main`, and `gh repo create --push` only while `main` holds nothing else.
+- **New projects ship too.** Start `remi` in a folder with no repository and the launcher asks before the session starts: `[Y]` runs `git init -b main`, makes one empty `chore: initial commit` on `main` and creates the private GitHub repo with `gh repo create <folder> --private --source . --push`; `[l]` makes only the local repository; `[n]` starts without one. `REMI_NEW_REPO=github|local|off` answers for you (non-interactive runs never create one unasked). It can't happen inside the session: Claude Code's sandbox only protects a repository that exists when the session starts and locks every write to a `.git` made later, so the guard refuses `git init`, `git clone` and `gh repo clone` in the session and points you back to the launcher. The session then works on a feature branch and opens the PR against `main`. The guard allows only that one empty commit on `main`, and `gh repo create --push` only while `main` holds nothing else.
 - No pushes to protected branches, no `--force` (only `--force-with-lease` on your own branch), no `--no-verify`.
 - Files are staged and committed in separate commands, so the gate checks exactly what gets committed.
 - **Conventional Commits, enforced.** Commit headers must look like `<type>(<scope>)!: <description>`. PR titles are plain, readable sentences about the outcome (e.g. `Add SEPA instant payments to transfers`), never a copied commit message. Allowed types: `feat`, `fix`, `refactor`, `perf`, `test`, `docs`, `build`, `ci`, `chore`, `style`, `revert`. The description is lowercase with no trailing period, and the header is ≤ 100 characters (72 recommended). Messages must be passed with `-m`, so editor and `-F` commits are refused.

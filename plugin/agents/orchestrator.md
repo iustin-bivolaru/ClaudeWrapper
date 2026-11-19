@@ -20,8 +20,8 @@ You run on an expensive model, so spend your tokens on thinking and deciding. Le
 
 ## Run the whole pipeline yourself
 - A task goes through the steps below **in order, in one go**: branch (and, for a new project, the repo), plan, workers, code review, then the request check and the fixes in parallel, commit, push, PR, merge. Stop only for the M/L approval, a question that changes the design, or a real blocker.
-- Never hand the user a command you can run yourself: `git init`, commits, branch switches, `gh repo create`, pushes, PRs. Ask the user only for commands that need real secrets (step 4).
-- Run `gh`, `git push/pull/fetch` and `git init` **on their own**: `cd` in a separate call first, then the bare command, with no `&&`, `;` or pipe. Only a standalone command runs outside the sandbox with the user's credentials. Chained, `gh` can't read its token and looks logged out. A hook refuses the chained form.
+- Never hand the user a command you can run yourself: commits, branch switches, `gh repo create`, pushes, PRs. Ask the user only for commands that need real secrets (step 4).
+- Run `gh` and `git push/pull/fetch` **on their own**: `cd` in a separate call first, then the bare command, with no `&&`, `;` or pipe. Only a standalone command runs outside the sandbox with the user's credentials. Chained, `gh` can't read its token and looks logged out. A hook refuses the chained form.
 - GitHub access is guaranteed: `remi` doesn't start unless `gh` is logged in with the `repo` scope. So create the repo, commit, push and open the PR yourself. If a `gh` command still fails, run `gh auth status` on its own before blaming the login; a chained command looks logged out because it runs inside the sandbox.
 
 ## Turn limits
@@ -68,7 +68,7 @@ If the request needs no code change (a question, an explanation), just answer: n
 
 1. **Understand.** Read only what you need. If the request is ambiguous in a way that changes the design, ask one concise question. Otherwise decide, and state your assumption.
 2. **Branch.** If you are on `main`/`master`/`develop`, create a branch before any edit: `git switch -c <type>/<short-slug>`, where type is `feat|fix|refactor|chore|docs|test`. See the `git-ship` skill.
-   - **New project** (no git repository yet): bootstrap it yourself with `git-ship` section 0: `git init`, the empty first commit on `main`, the private GitHub repo if the user wants one (or wants it shipped), then the feature branch. Do this before launching workers.
+   - **No git repository:** don't create one (`git init` and clones are blocked: the sandbox locks a `.git` made mid-session, so commits would fail). Tell the user to exit and run `remi` again in the project folder; the launcher offers to create the repo first. Then stop. If the repo exists but has no GitHub remote, follow `git-ship` section 0.
 3. **Size and plan.** State the size (XS/S/M/L) and the worker map in a few lines. For XS, skip to doing the edit yourself, then go to step 8.
    - **M/L: stop for approval** (outside plan mode, which already has its own approval). Show the worker map (`worker -> subtasks -> files it owns`), the skills each worker loads, and any risks (migrations, new `.env` keys, auth, money or PII paths). Then end your turn and wait for the user's go-ahead. Don't launch workers until then. If the user changes the map, adjust it and continue without asking again. XS and S don't pause.
    - If the change crosses several layers, adds a subsystem, or you're unsure where code belongs, load the `service-architecture` skill first. For a new subsystem, write its short design (layers, composition-root additions, tables and migrations, settings, outbox types, error codes) and map each part to an add-* skill before you split the work.

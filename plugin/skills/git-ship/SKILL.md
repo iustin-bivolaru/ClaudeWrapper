@@ -7,17 +7,16 @@ description: Branch, commit, push, PR and merge workflow (PR text via writing-pr
 
 Hooks enforce this: commits on `main/master/develop/release/production`, pushes to them, force pushes, `--no-verify`, `git add -A && git commit` in one command, and secret files in the index are all blocked.
 
-## 0. New project: bootstrap the repository
-When the project folder has no git repository yet, set it up yourself; don't ask the user to. Run each command **as its own Bash call**, in this order:
+## 0. New project: the launcher creates the repository
+Never create a repository inside the session (`git init`, `git clone`, `gh repo clone`): Claude Code's sandbox only protects a repository that exists when the session starts and locks every write to a `.git` made later, so the first commit fails. The guard refuses them. When the folder has no repository, tell the user to exit and run `remi` again there: the launcher asks, then runs `git init -b main`, the empty `chore: initial commit` and `gh repo create --private --push` before the session starts.
+
+If the repository exists but has no commits or no GitHub remote yet, finish it yourself, **each command as its own Bash call**:
 ```bash
-mkdir -p <project-folder>        # if it doesn't exist
-cd <project-folder>
-git init -b main
-git commit --allow-empty -m "chore: initial commit"
-gh repo create <repo-name> --private --source . --remote origin --push   # only if the user wants a GitHub repo or wants it shipped
+git commit --allow-empty -m "chore: initial commit"                       # only if HEAD has no commits
+gh repo create <repo-name> --private --source . --remote origin --push    # only if there's no remote and the user wants one (or wants it shipped)
 git switch -c <type>/<short-kebab-slug>
 ```
-- `git init` and `gh` run outside the sandbox only when they stand alone. Chained (`cd x && git init`), the sandbox stops `git init` from writing `.git/config`, and `gh` can't read its token, so it looks logged out.
+- `gh` runs outside the sandbox only when it stands alone. Chained (`cd x && gh ...`), it can't read its token, so it looks logged out.
 - The guard allows exactly this one commit on `main`: the empty first commit of a repository with no commits. `gh repo create --push` may publish `main` only while it holds just that commit. That gives the feature branch a base for its PR.
 - Never `--public`: the guard refuses public repositories. Use `--private` (or `--internal` for an organisation).
 - `remi` only starts when `gh` is logged in with the `repo` scope, so a failing `gh` command is almost always a chained command running inside the sandbox. Rerun it alone, and check `gh auth status` alone before asking the user for `! gh auth login`.

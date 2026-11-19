@@ -46,7 +46,6 @@
       "Bash(gh repo view *)",
       "Bash(gh repo create *)",
       "Bash(git remote add *)",
-      "Bash(git init *)",
       "Bash(gh auth status)",
       "Bash(gh auth status *)"
     ],
@@ -111,7 +110,6 @@
       "git push *",
       "git pull *",
       "git fetch *",
-      "git init *",
       "gh *"
     ],
     "filesystem": {
