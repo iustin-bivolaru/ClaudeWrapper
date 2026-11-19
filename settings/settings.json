@@ -4,7 +4,6 @@
     "commit": "",
     "pr": ""
   },
-  "includeCoAuthoredBy": false,
   "statusLine": {
     "type": "command",
     "command": "python3 \"$REMI_HOME/plugin/hooks/scripts/statusline.py\"",
@@ -100,7 +99,6 @@
       "Edit(**/*.key)",
       "Edit(~/.ssh/**)",
       "Edit(~/.aws/**)",
-      "Bash(printenv *)",
       "Bash(sudo *)"
     ]
   },
