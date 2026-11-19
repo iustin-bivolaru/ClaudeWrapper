@@ -46,6 +46,15 @@ Rules:
 - Re-size if the work turns out bigger or smaller than you thought. Don't keep a plan that no longer fits.
 - A hook caps parallel workers at `REMI_MAX_WORKERS` (3). That is a ceiling, not a target.
 
+## PLAN.md: work that spans several PRs
+A new project, or anything too big to ship well as one PR, gets a `PLAN.md` at the repository root, split into steps that each ship as one PR. A task that fits in one PR gets none.
+- **Write it** once the user approves the plan (step 3), on the first step's branch, and commit it with that step. Keep it short: the goal, the assumptions, the package layout and the interface between the parts, then a checklist with one line per step (`- [ ] 2. accounts: model, repository, service, routes`), each sized XS/S/M/L.
+- **Only you edit it**, never a worker. Put no secrets or client data in it: it's committed.
+- **Tick the step before the review** (step 6), in the same change: `- [x] 2. … (PR on <branch>)`. The merge gate only accepts the exact code that was reviewed, so a tick added after the review would block the merge. Record a change to later steps the same way, before the review.
+- **One step per session.** After shipping a step, report and tell the user to `/clear` and say "next step". Each step then starts with a fresh context instead of carrying the previous one.
+- **Resume from it.** At the start of a task, if `PLAN.md` exists and the request continues it ("next step", "continue"), read it, take the first unticked step, and run the workflow for that step only. Don't re-plan steps that are already ticked. If the request is unrelated, leave the file alone.
+- **The last step deletes it** (git history keeps it). Update the README in the steps that change what users see, not with the plan.
+
 ## Permission modes (Shift+Tab)
 The user cycles modes with Shift+Tab: default → accept edits → plan (→ auto, if enabled). Check which mode you're in at the start of each turn and adapt.
 
@@ -59,6 +68,7 @@ The user cycles modes with Shift+Tab: default → accept edits → plan (→ aut
   3. **Per subtask:** what changes and where, the skills to load (`add-feature`, architecture), and the exact test command.
   4. **Risk:** migrations, new config keys (and the user must add them to `.env`), auth, money or PII paths, breaking changes, and commands the user must run (anything that needs real secrets).
   5. **Review and ship:** whether `remi:reviewer` runs (always except non-sensitive XS), the branch name, and the commit plan in Conventional Commits headers.
+  6. **Steps** (only for work that needs several PRs): the `PLAN.md` checklist, one PR per step. The sections above then describe the first step.
 - End with ExitPlanMode. Once approved, follow the workflow below from step 2 (branch) and stick to the approved worker map. Re-plan only if you discover the plan is wrong, and say so.
 
 **Accept edits / default / auto:** follow the workflow below. M and L tasks pause for your approval of the worker map at step 3. In default mode the user approves edits and some commands one by one, so batch your actions to keep the prompts few.
@@ -66,18 +76,18 @@ The user cycles modes with Shift+Tab: default → accept edits → plan (→ aut
 ## Workflow
 If the request needs no code change (a question, an explanation), just answer: no branch, sizing, workers or review.
 
-1. **Understand.** Read only what you need. If the request is ambiguous in a way that changes the design, ask one concise question. Otherwise decide, and state your assumption.
+1. **Understand.** If `PLAN.md` exists and the request continues it, read it and work on its first unticked step (see PLAN.md above). Read only what you need. If the request is ambiguous in a way that changes the design, ask one concise question. Otherwise decide, and state your assumption.
 2. **Branch.** If you are on `main`/`master`/`develop`, create a branch before any edit: `git switch -c <type>/<short-slug>`, where type is `feat|fix|refactor|chore|docs|test`. See the `git-ship` skill.
    - **No git repository:** don't create one (`git init` and clones are blocked: the sandbox locks a `.git` made mid-session, so commits would fail). Tell the user to exit and run the exact command to restart: for a new project, `remi new <folder> "<their request>"` with a short kebab-case folder name you suggest (it creates the folder, the repo and the GitHub remote, then starts the session with the request); for an existing project, `remi` in its folder. Then stop. If the repo exists but has no GitHub remote, follow the new-repository section of `git-ship`.
 3. **Size and plan.** State the size (XS/S/M/L) and the worker map in a few lines. For XS, skip to doing the edit yourself, then go to step 8.
-   - **M/L: stop for approval** (outside plan mode, which already has its own approval). Show the worker map (`worker -> subtasks -> files it owns`), the skills each worker loads, and any risks (migrations, new `.env` keys, auth, money or PII paths). Then end your turn and wait for the user's go-ahead. Don't launch workers until then. If the user changes the map, adjust it and continue without asking again. XS and S don't pause.
+   - **M/L: stop for approval** (outside plan mode, which already has its own approval). Show the worker map (`worker -> subtasks -> files it owns`), the skills each worker loads, and any risks (migrations, new `.env` keys, auth, money or PII paths). For work that needs several PRs, show the steps of `PLAN.md` too, and write the file once approved. Then end your turn and wait for the user's go-ahead. Don't launch workers until then. If the user changes the map, adjust it and continue without asking again. XS and S don't pause.
    - If the change crosses several layers, adds a subsystem, or you're unsure where code belongs, load the `service-architecture` skill first. For a new subsystem, write its short design (layers, composition-root additions, tables and migrations, settings, outbox types, error codes) and check each part against `add-feature` before you split the work.
    - Include the relevant architecture skill's name in the worker briefs.
 4. **Delegate.** Launch the parallel workers in a single message, each with a brief shaped by `writing-worker-briefs` (essentials first and last). Workers have only `python-service-style` and `ponytail` preloaded. Each brief names `add-feature` when the subtask adds an endpoint, setting, migration, integration, outbox job or agent tool. Use it to plan too: it lists the pieces such a change must touch, and a missing piece is a common reason a feature doesn't work.
    - A subtask that needs real secrets to verify (the dev server, alembic against the dev DB) can't be run in the sandbox. Collect those commands and ask the user to run them.
 5. **Integrate.** Check each worker's report. Close any gap with `SendMessage` to that worker. Don't spawn a new worker for it. Pyright diagnostics from the workers' edits show up in your context: send real errors on changed lines to the owning worker.
    - Hooks have already run on each worker's own files: `ruff check --fix`, `ruff format` and lint when it finished, plus the tests when it was the last worker still running. Don't rerun them.
-6. **Review** (S/M/L, and XS changes in sensitive areas). Two steps, with the same reviewer:
+6. **Review** (S/M/L, and XS changes in sensitive areas). If there is a `PLAN.md`, tick this step first. Two steps, with the same reviewer:
    - **Code review, blind.** Launch `remi:reviewer` with **only** the base branch: "Review the changes against `main`." Don't explain what was done or why: the reviewer must judge the code cold. A hook refuses any other text, including the request.
    - **Request check.** When its code review is back, send the **same** reviewer (its agent id) the user's request with `SendMessage`:
      ```
@@ -104,7 +114,7 @@ If the request needs no code change (a question, an explanation), just answer: n
    - It stages the change (what you staged, else everything not git-ignored), runs the commit gate (request check sent, secret scan, format, lint, tests), commits, refuses a branch whose PR was merged or closed, pushes, opens the PR (or updates its title and body), and merges with `--match-head-commit` when the latest review said `VERDICT: APPROVE` and `REQUEST: MATCHES` on exactly this code. Otherwise it leaves the PR open and prints why. If it refuses, fix the cause it names and run it again.
    - Run it again after later changes (a second review round): it commits the new work and keeps the PR description current from the body file you rewrite.
    - Low findings listed with an approval don't block the merge: list them in the PR body and your report as follow-ups, and don't fix them before shipping, because any change after the approval needs a new review.
-9. **Report** in a few lines: the branch, the PR link, what changed, the review outcome (code review and request check), any `[request: unclear]` items, and anything left for the user. Say whether the PR was merged, or why it was left open. End with: "Task shipped. `/clear` before the next unrelated task." You can't clear the context yourself; the user decides.
+9. **Report** in a few lines: the branch, the PR link, what changed, the review outcome (code review and request check), any `[request: unclear]` items, and anything left for the user. Say whether the PR was merged, or why it was left open. End with: "Task shipped. `/clear` before the next unrelated task." For a `PLAN.md` step, name the next step and end with: "Step shipped. `/clear`, then say \"next step\"." You can't clear the context yourself; the user decides.
 
 ## CLAUDE.md
 - Every `CLAUDE.md` (and `CLAUDE.local.md`) stays at or under **200 lines**. A hook refuses larger writes, and the commit gate re-checks. Keep only what Claude can't infer from the code: commands, conventions, gotchas, and the risk map (modules that move money, handle PII, do auth, or hold migrations). Put long procedures in skills or `docs/` and link to them. In a multi-package repo, keep the root file short and give each package its own CLAUDE.md.
