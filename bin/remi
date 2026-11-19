@@ -11,6 +11,7 @@
 #   REMI_EXPLORER_MODEL      (haiku)   REMI_EXPLORER_EFFORT     (low)
 #   REMI_WORKER_MAX_TURNS    (50)      REMI_REVIEWER_MAX_TURNS  (25)       REMI_EXPLORER_MAX_TURNS (15)
 #   REMI_MAX_WORKERS         (3)       REMI_NO_BANNER           (unset)
+#   REMI_NEW_REPO            (ask)     folder without a git repo: ask | github | local | off
 #   REMI_PERMISSION_MODE     (claude's default) starting mode: manual | acceptEdits | plan | auto
 #                          also: --plan (shortcut for --permission-mode plan), --permission-mode <mode>
 # Switch modes during a session with Shift+Tab, as in plain Claude Code.
@@ -55,7 +56,9 @@ fi
 : "${REMI_REVIEWER_MODEL:=opus}"      "${REMI_REVIEWER_EFFORT:=medium}"
 : "${REMI_EXPLORER_MODEL:=haiku}"     "${REMI_EXPLORER_EFFORT:=low}"
 : "${REMI_WORKER_MAX_TURNS:=50}"      "${REMI_REVIEWER_MAX_TURNS:=25}"    "${REMI_EXPLORER_MAX_TURNS:=15}"
-: "${REMI_MAX_WORKERS:=3}"
+: "${REMI_MAX_WORKERS:=3}"           "${REMI_NEW_REPO:=ask}"
+case "$REMI_NEW_REPO" in ask|github|local|off) ;; *)
+  echo "remi: REMI_NEW_REPO='$REMI_NEW_REPO' must be one of: ask github local off" >&2; exit 2 ;; esac
 export REMI_ORCHESTRATOR_MODEL REMI_ORCHESTRATOR_EFFORT REMI_WORKER_MODEL REMI_WORKER_EFFORT \
        REMI_REVIEWER_MODEL REMI_REVIEWER_EFFORT REMI_EXPLORER_MODEL REMI_EXPLORER_EFFORT REMI_MAX_WORKERS \
        REMI_WORKER_MAX_TURNS REMI_REVIEWER_MAX_TURNS REMI_EXPLORER_MAX_TURNS
@@ -170,6 +173,48 @@ github_scopes="$(printf '%s\n' "$github_response" | tr -d '\r' | sed -n 's/^[Xx]
 if [ -n "$github_scopes" ] && ! printf '%s\n' "$github_scopes" | tr ',' '\n' | tr -d ' ' | grep -qx repo; then
   echo "remi: the gh token can't create repos or push (its scopes: $github_scopes). Run: gh auth refresh -h github.com -s repo" >&2
   exit 1
+fi
+
+# --- new project: create the repository before the session starts ---------------------
+# Claude Code's sandbox only protects a repository that exists when the session starts: a
+# .git made mid-session is locked against every sandboxed write, so commits fail. The
+# launcher runs as the user, outside the sandbox, so it bootstraps the repo here instead.
+if [ "$is_print_mode" = false ] && [ "$REMI_NEW_REPO" != off ] && [ "$PWD" != "$HOME" ] && [ "$PWD" != / ] \
+   && ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  project_folder="${PWD##*/}"
+  repo_name="$(printf '%s' "$project_folder" | tr -c 'A-Za-z0-9._-' '-')"
+  new_repo_choice="$REMI_NEW_REPO"
+  if [ "$new_repo_choice" = ask ]; then
+    if [ -t 0 ] && [ -t 1 ]; then
+      printf "remi: '%s' is not a git repository, and the session can't create one (the sandbox locks a .git made mid-session).\n" "$project_folder"
+      printf "      Create it now: git init, an empty first commit on main and a private GitHub repo '%s'?\n" "$repo_name"
+      printf "      [Y] yes · [l] local repository only · [n] no: "
+      read -r new_repo_answer || new_repo_answer=n
+      case "$new_repo_answer" in
+        ""|[Yy]*) new_repo_choice=github ;;
+        [Ll]*) new_repo_choice=local ;;
+        *) new_repo_choice=off ;;
+      esac
+    else
+      echo "remi: '$project_folder' is not a git repository; remi can't commit here. Run remi interactively once, or set REMI_NEW_REPO=github|local." >&2
+      new_repo_choice=off
+    fi
+  fi
+  if [ "$new_repo_choice" != off ]; then
+    git init -q -b main
+    git commit -q --allow-empty -m "chore: initial commit" || {
+      echo "remi: the first commit failed. Set your git identity (git config --global user.name/user.email) and run remi again." >&2
+      exit 1
+    }
+    echo "remi: created a git repository on main with an empty first commit."
+    if [ "$new_repo_choice" = github ]; then
+      if gh repo create "$repo_name" --private --source . --remote origin --push; then
+        echo "remi: created the private GitHub repository '$repo_name'."
+      else
+        echo "remi: couldn't create the GitHub repository '$repo_name'; the local repository is ready, and remi can create it later in the session." >&2
+      fi
+    fi
+  fi
 fi
 
 # --- the remi hamster: monochrome, interactive sessions only ------------------------------

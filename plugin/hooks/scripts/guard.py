@@ -5,11 +5,13 @@ secret material (.env files, keys, cloud credentials, environment dumps) and
 any git operation that bypasses the branch workflow (commits on main, force
 pushes, ``--no-verify``). The guard fails closed: a malformed payload blocks.
 
-Commands that need the user's credentials (``gh``, ``git push/pull/fetch``) and
-``git init`` run outside the sandbox only when they stand alone, so the guard
-refuses them inside a chain or pipe. A brand-new repository may get exactly one
-empty bootstrap commit on its protected branch, published with
-``gh repo create --push``, so that feature branches have a base to open PRs on.
+Commands that need the user's credentials (``gh``, ``git push/pull/fetch``) run
+outside the sandbox only when they stand alone, so the guard refuses them inside a
+chain or pipe. No repository may be created mid-session (``git init``, clones): the
+sandbox locks a ``.git`` that didn't exist at startup, so the launcher bootstraps new
+projects instead. A repository without commits may still get exactly one empty
+bootstrap commit on its protected branch, published with ``gh repo create --push``,
+so that feature branches have a base to open PRs on.
 """
 
 from __future__ import annotations
@@ -28,7 +30,7 @@ from conventional_commits import commit_header, header_problems  # noqa: E402
 
 PROTECTED_BRANCHES = frozenset({"main", "master", "develop", "release", "production"})
 SHELL_OPERATORS = frozenset({";", "&", "|"})
-UNSANDBOXED_GIT_COMMANDS = frozenset({"push", "pull", "fetch", "init"})
+UNSANDBOXED_GIT_COMMANDS = frozenset({"push", "pull", "fetch"})
 
 # Shell constructs that dump the environment or read secrets indirectly.
 ENV_DUMP_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = tuple(
@@ -186,16 +188,14 @@ def is_bootstrap_head(cwd: Path) -> bool:
     return count_code == 0 and count == "1" and files_code == 0 and not files
 
 
-def check_standalone(command: str) -> None:
-    """Refuse credential commands inside a chain or pipe.
-
-    The sandbox runs ``gh``, ``git push/pull/fetch`` and ``git init`` outside it only
-    when the whole command starts with them. Chained, they run sandboxed: ``gh`` can't
-    read its token from the keychain (so it reports being logged out) and ``git init``
-    can't write ``.git/config``.
+def command_segments(command: str) -> list[list[str]]:
+    """Split a command line into its simple commands, without leading ``VAR=value`` words.
 
     Args:
         command: Raw shell command line.
+
+    Returns:
+        One word list per command between ``;``, ``&`` and ``|`` operators.
     """
     segments: list[list[str]] = [[]]
     for word in shell_words(command):
@@ -203,20 +203,56 @@ def check_standalone(command: str) -> None:
             segments.append([])
         else:
             segments[-1].append(word)
-    segments = [segment for segment in segments if segment]
+    stripped = [[word for word in segment if not re.match(r"^\w+=", word)] for segment in segments]
+    return [segment for segment in stripped if segment]
+
+
+def check_standalone(command: str) -> None:
+    """Refuse credential commands inside a chain or pipe.
+
+    The sandbox runs ``gh`` and ``git push/pull/fetch`` outside it only when the whole
+    command starts with them. Chained, they run sandboxed: ``gh`` can't read its token
+    from the keychain, so it reports being logged out.
+
+    Args:
+        command: Raw shell command line.
+    """
+    segments = command_segments(command)
     if len(segments) < 2:
         return
-    for segment in segments:
-        words = [word for word in segment if not re.match(r"^\w+=", word)]
-        if not words:
-            continue
+    for words in segments:
         subcommand = next((word for word in words[1:] if not word.startswith("-")), "")
         if words[0] == "gh" or (words[0] == "git" and subcommand in UNSANDBOXED_GIT_COMMANDS):
             block(
                 f"run `{' '.join(words[:3])}` on its own: no `&&`, `;` or pipe, and `cd` in a separate call first. "
                 "Only a standalone command runs outside the sandbox with the user's credentials. Chained, `gh` "
-                "can't read its token (it looks logged out) and `git init` can't write .git/config."
+                "can't read its token, so it looks logged out."
             )
+
+
+def check_new_repository(command: str) -> None:
+    """Refuse creating a repository inside the session.
+
+    Claude Code's sandbox protects only repositories that exist when the session starts;
+    a ``.git`` made later is locked against every sandboxed write, so the first commit
+    fails. The launcher creates the repository before the session instead.
+
+    Args:
+        command: Raw shell command line.
+    """
+    for words in command_segments(command):
+        git_words = words[3:] if words[:2] == ["git", "-C"] else words[1:]
+        creates = (words[0] == "git" and git_words[:1] in (["init"], ["clone"])) or (
+            words[:2] == ["gh", "repo"]
+            and (words[2:3] == ["clone"] or (words[2:3] in (["create"], ["fork"]) and "--clone" in words))
+        )
+        if not creates:
+            continue
+        block(
+            "a repository can't be created inside the session: the sandbox locks a .git made after startup, so "
+            "commits would fail. Ask the user to exit and run `remi` again in the project folder; the launcher "
+            "offers to create the repository (git init, first commit, private GitHub repo) before the session starts."
+        )
 
 
 def check_git_policy(command: str, cwd: Path) -> None:
@@ -295,6 +331,7 @@ def check_bash(command: str, cwd: Path) -> None:
     for pattern, why in DESTRUCTIVE_PATTERNS:
         if pattern.search(command):
             block(f"{why}. Ask the user to run it themselves if it is really needed.")
+    check_new_repository(command)
     check_standalone(command)
     check_git_policy(command, cwd)
     check_conventional_commit(command)

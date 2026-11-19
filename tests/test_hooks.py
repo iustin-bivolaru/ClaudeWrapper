@@ -1023,6 +1023,42 @@ def test_onboard_outside_git(tmp_path):
     assert "inside a git repository" in result.stderr
 
 
+# --- no repository is created mid-session ------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "git init -b main",
+        "git init",
+        "git -C sub init",
+        "cd ~/proj && git init -b main",
+        "git clone https://github.com/acme/x.git",
+        "gh repo clone acme/x",
+        "gh repo create svc --private --clone",
+        "gh repo fork acme/x --clone",
+    ],
+)
+def test_new_repository_in_session_blocked(repo, command):
+    result = run_hook("pre-tool", tool("Bash", cwd=repo, command=command))
+    assert result.returncode == 2, command
+    assert "run `remi` again" in result.stderr
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "git commit -m 'docs: explain that git init runs in the launcher'",
+        "gh repo create svc --private --source . --remote origin --push",
+        "grep -rn 'git clone' README.md",
+    ],
+)
+def test_mentioning_new_repository_commands_allowed(repo, command):
+    git(repo, "switch", "-qc", "feat/x")
+    result = run_hook("pre-tool", tool("Bash", cwd=repo, command=command))
+    assert result.returncode == 0, result.stderr
+
+
 # --- credential commands stand alone; new repositories bootstrap themselves --------
 
 
@@ -1032,7 +1068,6 @@ def test_onboard_outside_git(tmp_path):
         "cd ~/proj && gh auth status",
         "ls; gh repo view",
         "gh pr list | head -5",
-        "cd ~/proj && git init -b main",
         "git add a.txt && git push origin HEAD",
         "GH_PAGER= gh pr view && echo done",
     ],
@@ -1050,7 +1085,6 @@ def test_chained_credential_commands_blocked(repo, command):
         'gh pr create --title "Add limits" --body "a | b; c && d" --head feat/x',
         "git status --short && git diff --stat",
         "git log --oneline | grep push",
-        "git init -b main",
     ],
 )
 def test_standalone_credential_commands_allowed(repo, command):
@@ -1104,7 +1138,7 @@ LAUNCHER = SCRIPTS.parents[2] / "bin" / "remi"
 SCOPED_RESPONSE = "HTTP/2.0 200 OK\nX-Oauth-Scopes: {scopes}\n\n{{}}"
 
 
-def run_launcher(tmp_path: Path, gh_script: str | None):
+def run_launcher(tmp_path: Path, gh_script: str | None, cwd: Path | None = None, **extra_env: str):
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir(exist_ok=True)
     (fake_bin / "claude").write_text("#!/bin/sh\necho CLAUDE STARTED\n")
@@ -1117,8 +1151,16 @@ def run_launcher(tmp_path: Path, gh_script: str | None):
         "HOME": str(tmp_path),
         "XDG_CONFIG_HOME": str(tmp_path / "config"),
         "REMI_NO_BANNER": "1",
+        "GIT_CONFIG_GLOBAL": str(tmp_path / "gitconfig"),
+        "GIT_AUTHOR_NAME": "t",
+        "GIT_AUTHOR_EMAIL": "t@example.com",
+        "GIT_COMMITTER_NAME": "t",
+        "GIT_COMMITTER_EMAIL": "t@example.com",
+        **extra_env,
     }
-    return subprocess.run(["bash", str(LAUNCHER)], capture_output=True, text=True, env=env, cwd=tmp_path, check=False)
+    return subprocess.run(
+        ["bash", str(LAUNCHER)], capture_output=True, text=True, env=env, cwd=cwd or tmp_path, check=False
+    )
 
 
 @pytest.mark.parametrize(
@@ -1142,6 +1184,48 @@ def test_launcher_starts_when_github_ready(tmp_path, scopes):
     result = run_launcher(tmp_path, f"printf '{response}'")
     assert result.returncode == 0, result.stderr
     assert "CLAUDE STARTED" in result.stdout
+
+
+GH_READY = 'case "$1" in api) printf \'HTTP/2.0 200 OK\\n\\n{}\' ;; *) echo "gh $*" >> "$HOME/gh.log" ;; esac'
+
+
+def new_project(tmp_path: Path) -> Path:
+    project = tmp_path / "my game"
+    project.mkdir()
+    (project / "game.py").write_text("print('hi')\n")
+    return project
+
+
+@pytest.mark.parametrize(("choice", "remote"), [("github", True), ("local", False)])
+def test_launcher_bootstraps_new_project(tmp_path, choice, remote):
+    project = new_project(tmp_path)
+    result = run_launcher(tmp_path, GH_READY, cwd=project, REMI_NEW_REPO=choice)
+    assert result.returncode == 0, result.stderr
+    assert "CLAUDE STARTED" in result.stdout
+    log = subprocess.run(["git", "log", "--format=%s", "--stat"], cwd=project, capture_output=True, text=True)
+    assert log.stdout.strip() == "chore: initial commit"
+    branch = subprocess.run(["git", "branch", "--show-current"], cwd=project, capture_output=True, text=True)
+    assert branch.stdout.strip() == "main"
+    gh_log = tmp_path / "gh.log"
+    assert (gh_log.exists() and gh_log.read_text()) == (
+        "gh repo create my-game --private --source . --remote origin --push\n" if remote else False
+    )
+
+
+@pytest.mark.parametrize("choice", ["ask", "off"])
+def test_launcher_leaves_folder_alone_without_consent(tmp_path, choice):
+    project = new_project(tmp_path)
+    result = run_launcher(tmp_path, GH_READY, cwd=project, REMI_NEW_REPO=choice)
+    assert result.returncode == 0, result.stderr
+    assert "CLAUDE STARTED" in result.stdout
+    assert not (project / ".git").exists()
+    assert ("not a git repository" in result.stderr) == (choice == "ask")
+
+
+def test_launcher_rejects_unknown_new_repo_choice(tmp_path):
+    result = run_launcher(tmp_path, GH_READY, cwd=new_project(tmp_path), REMI_NEW_REPO="yes")
+    assert result.returncode == 2
+    assert "REMI_NEW_REPO" in result.stderr
 
 
 # --- merge gate: only after APPROVE + MATCHES, on exactly the reviewed files -------------
