@@ -56,7 +56,7 @@ The header is `<type>(<scope>)!: <description>`. The guard refuses any commit me
 | `build` | the build system, dependencies, packaging |
 | `ci` | CI configuration |
 | `chore` | maintenance that touches no `src` or test code |
-| `style` | formatting only (rare: the formatter runs on every edit) |
+| `style` | formatting only (rare: the formatter runs before review and commit) |
 | `revert` | reverts an earlier commit (name it in the body) |
 
 - **Scope** is optional, lowercase, and names the area: `feat(payments): …`, `fix(fx-rates): …`, `chore(deps): …`.

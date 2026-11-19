@@ -154,3 +154,31 @@ def state_dir(payload: dict[str, Any]) -> Path:
     path = base / session
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+def edits_log(payload: dict[str, Any]) -> Path:
+    """Return the file that lists the Python files an agent has edited.
+
+    Args:
+        payload: Hook payload; its ``agent_id`` names the subagent, none means the main session.
+
+    Returns:
+        Path of the edit log (``main.txt`` for the main session).
+    """
+    edits_directory = state_dir(payload) / "edits"
+    edits_directory.mkdir(exist_ok=True)
+    agent_name = re.sub(r"[^\w-]", "_", str(payload.get("agent_id") or "main"))
+    return edits_directory / f"{agent_name}.txt"
+
+
+def record_edit(payload: dict[str, Any]) -> None:
+    """Remember the Python file a Write/Edit is about to change, for the end-of-turn gates.
+
+    Args:
+        payload: PreToolUse payload for Write, Edit or MultiEdit.
+    """
+    file_path = str((payload.get("tool_input") or {}).get("file_path") or "")
+    if not file_path.endswith(".py"):
+        return
+    with edits_log(payload).open("a", encoding="utf-8") as log_file:
+        log_file.write(f"{Path(file_path).resolve()}\n")

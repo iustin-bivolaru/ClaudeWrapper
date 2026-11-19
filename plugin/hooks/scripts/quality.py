@@ -2,8 +2,9 @@
 
 Handlers, called by ``dispatch.py``:
 
-* ``edit``   - PostToolUse on Edit/Write: format + autofix the touched Python
-               file and report leftover lint (incl. missing docstrings).
+* ``stop``   - Stop (main session): when the orchestrator itself edited Python this
+               turn, fix + format + lint those files, then run the tests if no
+               worker is running. Nothing runs per edit; edits are only recorded.
 * ``commit`` - PreToolUse on Bash: before ``git commit`` scan the staged diff
                for secrets and run the full gate; block the commit on failure.
 * ``worker`` - SubagentStop: ``ruff check --fix`` + ``ruff format`` on the files
@@ -43,7 +44,7 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from _common import ALLOW, BLOCK, block, is_secret_path, project_dir, repository_root, state_dir  # noqa: E402
+from _common import ALLOW, BLOCK, block, edits_log, is_secret_path, project_dir, repository_root  # noqa: E402
 from agent_policy import _slot_name, request_check_due, slots_locked  # noqa: E402
 from agent_policy import on_stop as release_worker_slot  # noqa: E402
 from claude_md import count_lines, is_claude_md, max_lines  # noqa: E402
@@ -289,33 +290,6 @@ def run_gate(root: Path, *, staged_only: bool) -> str | None:
     return None
 
 
-def on_edit(payload: dict[str, Any]) -> int:
-    """Format and lint a single edited Python file.
-
-    Args:
-        payload: PostToolUse payload.
-
-    Returns:
-        Exit code; 2 sends remaining lint problems back to Claude.
-    """
-    file_path = (payload.get("tool_input") or {}).get("file_path", "")
-    path = Path(file_path)
-    if path.suffix != ".py" or not path.is_file():
-        return ALLOW
-    record_edit(payload, path)
-    root = repository_root(path.parent)
-    problems = lint_files(root, [path], fix=True)
-    if problems:
-        print(
-            f"Lint issues remain in {path.name}. Fix them now: public functions, methods and classes need "
-            f"docstrings, and names must be descriptive snake_case words, never single letters:\n"
-            f"{tail(chr(10).join(problems), 30)}",
-            file=sys.stderr,
-        )
-        return BLOCK
-    return ALLOW
-
-
 def _is_test_file(file_path: Path) -> bool:
     """Tell whether a file is a pytest module (docstring rules don't apply to tests).
 
@@ -495,48 +469,16 @@ def unformatted_files(root: Path, files: list[Path], *, staged: bool = False) ->
     return unformatted
 
 
-def _edits_log(payload: dict[str, Any]) -> Path:
-    """Return the file that lists what the current subagent has edited.
-
-    Args:
-        payload: Hook payload carrying ``agent_id``.
-
-    Returns:
-        Path of the per-agent edit log.
-    """
-    edits_directory = state_dir(payload) / "edits"
-    edits_directory.mkdir(exist_ok=True)
-    return edits_directory / f"{_slot_name(payload)}.txt"
-
-
-def record_edit(payload: dict[str, Any], path: Path) -> None:
-    """Remember that the current subagent edited ``path``.
-
-    The worker-stop gate then checks only that worker's own files. Edits made by the
-    orchestrator (with no ``agent_id``) aren't recorded.
-
-    Args:
-        payload: PostToolUse payload.
-        path: The edited file.
-    """
-    if not payload.get("agent_id"):
-        return
-    with _edits_log(payload).open("a", encoding="utf-8") as log_file:
-        log_file.write(f"{path.resolve()}\n")
-
-
 def edited_by_agent(payload: dict[str, Any]) -> list[Path]:
-    """Return the files the stopping subagent edited.
+    """Return the Python files the agent (or, without ``agent_id``, the main session) edited.
 
     Args:
-        payload: SubagentStop payload carrying ``agent_id``.
+        payload: Stop or SubagentStop payload.
 
     Returns:
         Unique file paths, possibly empty.
     """
-    if not payload.get("agent_id"):
-        return []
-    log_path = _edits_log(payload)
+    log_path = edits_log(payload)
     if not log_path.is_file():
         return []
     return sorted({Path(line) for line in log_path.read_text(encoding="utf-8").splitlines() if line.strip()})
@@ -778,6 +720,45 @@ def _worker_gate(payload: dict[str, Any]) -> int:
             file=sys.stderr,
         )
         return BLOCK
+    return ALLOW
+
+
+def on_stop(payload: dict[str, Any]) -> int:
+    """End-of-turn gate for the main session: check the Python files it edited itself.
+
+    Turns without Python edits cost nothing. Workers have their own gate on stop, and
+    the pre-review gate covers the whole change, so this only catches XS work the
+    orchestrator did by hand. Tests wait while a worker is running.
+
+    Args:
+        payload: Stop payload.
+
+    Returns:
+        Exit code; 2 sends the problems back so the turn continues once.
+    """
+    if payload.get("stop_hook_active"):
+        return ALLOW  # already sent back once; don't loop
+    edited_files = edited_by_agent(payload)
+    if not edited_files:
+        return ALLOW
+    files_by_root: dict[Path, list[Path]] = {}
+    for file_path in edited_files:
+        files_by_root.setdefault(repository_root(file_path.parent), []).append(file_path)
+    problems = [problem for root, files in files_by_root.items() for problem in lint_files(root, files, fix=True)]
+    if problems:
+        print(
+            "Lint problems in the files you edited (ruff --fix and format were already applied). Fix them:\n"
+            + tail("\n".join(problems), 40),
+            file=sys.stderr,
+        )
+        return BLOCK
+    if not running_workers(payload, excluding_self=False):
+        for root in files_by_root:
+            failure = run_steps(root, {"typecheck", "test"})
+            if failure:
+                print(f"Tests are red after your edits. Fix them:\n{failure}", file=sys.stderr)
+                return BLOCK
+    edits_log(payload).unlink(missing_ok=True)
     return ALLOW
 
 

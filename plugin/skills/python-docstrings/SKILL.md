@@ -9,7 +9,7 @@ description: Documentation standard for Python code - reST docstrings (:param:/:
 
 Every **public** module, class, method and function gets a docstring. Private helpers (`_name`) get one when the logic isn't obvious. Tests don't need one: a clear test name is enough.
 
-After every edit, a hook flags public classes, methods and functions that have no docstring (ruff `D101`/`D102`/`D103`/`D106`/`D419`). Fix them right away.
+When an agent finishes, a hook flags public classes, methods and functions that have no docstring (ruff `D101`/`D102`/`D103`/`D106`/`D419`). Write them as you go so that check stays quiet.
 
 ## Format
 
