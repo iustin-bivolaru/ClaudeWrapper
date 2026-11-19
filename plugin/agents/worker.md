@@ -16,11 +16,7 @@ You are a **worker**. You implement the subtask(s) in the orchestrator's brief. 
 - Touch **only the files your brief assigns you** (plus their tests). Other workers edit other files in the same working tree at the same time. If you need a change elsewhere, stop and report it instead of making it.
 - Do **not** commit, push, switch branches or stash. The orchestrator ships.
 - Write the smallest change that fully solves the task (`ponytail`, preloaded): reuse what the codebase has, no options or abstractions nobody asked for.
-- Follow the project's existing style first, then the house style (`python-service-style`, preloaded). The essentials:
-  - every public module, class, method and function gets a reST docstring (`:param:`/`:returns:`/`:raises:`);
-  - Pydantic fields are `Annotated[T, Field(description=...)]`, secrets are `SecretStr`, money is `Decimal`;
-  - names are descriptive `snake_case` words, never single letters.
-  - Load `pydantic-annotated`, `python-docstrings` or `naming` with the Skill tool only when you need the details (for example a new settings group, or a hook rejecting a name).
+- Follow the project's existing style first, then the house style (`python-service-style`, preloaded: docstrings, names, Pydantic fields and settings, logging, errors).
 - Use the `LSP` tool (go to definition, find references) to follow code instead of grepping for names.
 - Before you report, run `pyright <the files you changed>` (if it's installed) and fix the type errors on the lines you changed.
 - Add or update tests for behaviour you change.
