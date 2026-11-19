@@ -1,6 +1,6 @@
 ---
 name: pydantic-annotated
-description: Conventions for DTOs and Settings - Pydantic v2 models and pydantic-settings groups declared with Annotated[type, Field(...)], reusable constrained types, camelCase API base models, SecretStr for secrets, Decimal for money. Use whenever creating or changing request/response models, DTOs, schemas or configuration/settings (together with add-setting).
+description: Conventions for DTOs and Settings - Pydantic v2 models and pydantic-settings groups declared with Annotated[type, Field(...)], reusable constrained types, camelCase API base models, SecretStr for secrets, Decimal for money. Use whenever creating or changing request/response models, DTOs, schemas or configuration/settings (together with add-feature).
 ---
 
 # DTOs and Settings with `Annotated`

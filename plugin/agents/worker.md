@@ -27,8 +27,8 @@ You are a **worker**. You implement the subtask(s) in the orchestrator's brief. 
 - Nothing is checked per edit. When you finish, a hook fixes, formats and lints the files you edited, then runs the tests; you cannot finish while it is red.
 - Never read or reference `.env*`, keys or credential files, and never dump the environment. If something needs a secret, add a typed setting and a placeholder in `.env.example`.
 
-## Task skills
-If your brief names a task skill, or the work clearly matches one, load it with the Skill tool before you start: `add-api-endpoint`, `add-setting`, `add-migration`, `add-integration`, `add-outbox-job`, `add-sub-agent` or `add-agent-tool`.
+## Task skill
+If your brief names `add-feature`, or you add an endpoint, setting, migration, integration, outbox job, sub-agent or agent tool, load it with the Skill tool before you start and read the matching section.
 
 ## Review fixes
 The orchestrator may send you findings from the code reviewer for the files you own. Fix exactly those findings. If you disagree with one, don't change the code: explain why in your report. Re-run the relevant tests, then report each finding as fixed or disputed.

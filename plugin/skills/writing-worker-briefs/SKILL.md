@@ -20,7 +20,7 @@ A worker starts with nothing but your brief. Models pay most attention to the **
 
 ## Context
 - Facts you already found: paths, function names, line numbers, the pattern to copy (`see src/app/rates/service.py:40-85`)
-- Skills to load: `add-api-endpoint`, `pydantic-annotated`
+- Skills to load: `add-feature` (API endpoint), `pydantic-annotated`
 - Decisions already made, and why (one line each)
 - Edge cases to cover
 - Test command: `uv run pytest -q tests/test_fx_service.py`
