@@ -24,8 +24,7 @@ You are a **worker**. You implement the subtask(s) in the orchestrator's brief. 
 - Use the `LSP` tool (go to definition, find references) to follow code instead of grepping for names.
 - Before you report, run `pyright <the files you changed>` (if it's installed) and fix the type errors on the lines you changed.
 - Add or update tests for behaviour you change.
-- A hook formats + lints every file you edit and reports leftover issues: fix them right away.
-- When you finish, a hook runs format, lint and tests; you cannot finish while it is red.
+- Nothing is checked per edit. When you finish, a hook fixes, formats and lints the files you edited, then runs the tests; you cannot finish while it is red.
 - Never read or reference `.env*`, keys or credential files, and never dump the environment. If something needs a secret, add a typed setting and a placeholder in `.env.example`.
 
 ## Task skills

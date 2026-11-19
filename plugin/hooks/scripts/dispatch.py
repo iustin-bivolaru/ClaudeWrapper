@@ -10,10 +10,11 @@ Events:
 * ``pre-tool``       - PreToolUse: the secret and git guard, the CLAUDE.md limit, and,
                        per tool, the commit gate and merge gate (Bash), the agent
                        policy and pre-review gate (Agent), the reviewer message check
-                       (SendMessage).
-* ``post-tool``      - PostToolUse on Edit/Write: fix, format and lint the file.
+                       (SendMessage). Write/Edit of a ``.py`` file is recorded for
+                       the end-of-turn gates; nothing is linted per edit.
 * ``subagent-start`` - SubagentStart: turn a worker's reservation into a slot.
 * ``subagent-stop``  - SubagentStop: the worker gate, or record a reviewer's verdict.
+* ``stop``           - Stop: the main session's end-of-turn gate, only if it edited Python.
 * ``prompt``         - UserPromptSubmit: record the user's message for the request check.
 
 A malformed payload blocks a PreToolUse call (fail closed) and is ignored elsewhere.
@@ -27,7 +28,7 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from _common import ALLOW, BLOCK, block, read_payload  # noqa: E402
+from _common import ALLOW, BLOCK, block, read_payload, record_edit  # noqa: E402
 
 FILE_WRITE_TOOLS = frozenset({"Write", "Edit", "MultiEdit"})
 
@@ -59,6 +60,8 @@ def pre_tool(payload: dict[str, Any]) -> int:
         import claude_md
 
         claude_md.check(payload)
+    if tool in FILE_WRITE_TOOLS:
+        record_edit(payload)
     if tool == "Bash":
         import merge_gate
         import quality
@@ -67,20 +70,18 @@ def pre_tool(payload: dict[str, Any]) -> int:
     return ALLOW
 
 
-def post_tool(payload: dict[str, Any]) -> int:
-    """Fix, format and lint an edited file.
+def stop(payload: dict[str, Any]) -> int:
+    """Gate the end of the main session's turn.
 
     Args:
-        payload: PostToolUse payload.
+        payload: Stop payload.
 
     Returns:
-        2 when lint problems remain, else 0.
+        2 to send problems back, else 0.
     """
-    if str(payload.get("tool_name", "")) not in FILE_WRITE_TOOLS:
-        return ALLOW
     import quality
 
-    return quality.on_edit(payload)
+    return quality.on_stop(payload)
 
 
 def subagent_start(payload: dict[str, Any]) -> int:
@@ -127,9 +128,9 @@ def prompt(payload: dict[str, Any]) -> int:
 
 EVENTS = {
     "pre-tool": pre_tool,
-    "post-tool": post_tool,
     "subagent-start": subagent_start,
     "subagent-stop": subagent_stop,
+    "stop": stop,
     "prompt": prompt,
 }
 

@@ -115,11 +115,12 @@ you: task ─▶ orchestrator: new project? git init · empty first commit on ma
              │  size it (XS/S/M/L; a new project is at least M), plan, worker map
              │  (M/L: waits for you to approve the worker map)
              │
-             ├─ XS ─▶ orchestrator edits directly ─────────────────────────────┐
+             ├─ XS ─▶ orchestrator edits directly (checked when its turn ends) ─┐
              │                                                                  │
              └─ S/M/L ─▶ 1–3 workers (related subtasks share a worker)          │
-                          each edit:    ruff check --fix · ruff format · lint   │
-                          worker done:  same on ITS files (+ tests if last)     │
+                          each edit:    nothing runs (the file is only noted)   │
+                          worker done:  ruff --fix · format · lint on ITS files │
+                                        (+ tests if it's the last worker)       │
                                         red ⇒ the worker keeps going            │
                           ▼                                                     │
               pre-review gate (hook): all workers finished?                     │
@@ -178,8 +179,9 @@ So one fixed line in an old module stays a one-line diff, and workers don't spen
 
 | When | What runs |
 |---|---|
-| After every Edit/Write of a `.py` file | `ruff check --fix` + `ruff format` (scoped as above), then lint (changed lines) with the docstring, pep8-naming, no-f-strings-in-logs (`G004`) and no-relative-imports (`TID252`) rules, plus the single-letter-name check; leftover issues go back to the agent |
-| When a worker tries to finish | `ruff check --fix` + `ruff format` + lint + naming on **the files that worker edited**, so it is never blocked by another worker's half-finished files. Tests run only if it is the last worker still running. The worker keeps going while red. |
+| Each Edit/Write of a `.py` file | Nothing is checked. The path is appended to the agent's edit list, so editing never waits on ruff and files don't change under the agent mid-task. |
+| When a worker tries to finish | `ruff check --fix` + `ruff format` (scoped as above), then lint (changed lines) with the docstring, pep8-naming, no-f-strings-in-logs (`G004`) and no-relative-imports (`TID252`) rules, plus the single-letter-name check, on **the files that worker edited**, so it is never blocked by another worker's half-finished files. Tests run only if it is the last worker still running. The worker keeps going while red. |
+| When the main session's turn ends (`Stop`) | Only if the orchestrator edited Python itself this turn (XS work): the same fix, format, lint and naming on those files, then tests unless a worker is still running. Red sends it back once. Turns without Python edits run nothing. |
 | Before `remi:reviewer` starts | Every worker must be finished. Then `ruff check --fix` + `ruff format` on the whole change, followed by naming → format check → lint → typecheck → tests. If anything is red, the review is refused and the failures go to the workers. |
 | When `remi:reviewer` is launched | Its prompt must be one base-branch line. Explanations, plans and your request are refused, so the code review is blind. |
 | When the request goes to the reviewer (`SendMessage`) | One instruction line plus your messages quoted word for word in `<request>` blocks (your messages are recorded by a `UserPromptSubmit` hook). Explanations, plans and reworded quotes are refused. |
@@ -214,7 +216,7 @@ Every `CLAUDE.md` / `CLAUDE.local.md`, at any depth, stays at or under **200 lin
 - **Turn limits:** workers 50, reviewer 25, explorer 15. A worker that hits its limit stops with a partial result, and the orchestrator continues it with `SendMessage` (which gives it a fresh budget) or re-plans. Workers are told to wind down cleanly at about two-thirds of their budget.
 - **Task sizing.** XS changes are made directly by the orchestrator, with no worker and no Opus review unless the change is security-sensitive. S uses 1 worker, M 2, L 3. A new project from scratch is at least M: one worker for the core logic and one for the project shell and API, working in parallel against an interface fixed in the plan. `REMI_MAX_WORKERS` (3) is a hard ceiling, not a target. Related subtasks share one worker.
 - **Lean workers.** Only `python-service-style` and `ponytail` are preloaded. Other skills load when the brief asks for them. Briefs pass along facts the orchestrator already found, so workers don't search again.
-- **No duplicate checks.** Hooks lint on edit, test when a worker stops, and run everything at commit. The orchestrator doesn't rerun them in between. Slots are tracked per agent id, so a worker resumed for review fixes is never counted twice.
+- **No duplicate checks.** Hooks lint and test when a worker or the main turn ends, never per edit, and run everything at commit. The orchestrator doesn't rerun them in between. Slots are tracked per agent id, so a worker resumed for review fixes is never counted twice.
 - Review fixes go back to the worker that already has the context (`SendMessage`), not to a fresh one. The Opus reviewer runs a second time only if it found critical or high issues (in the code review or the request check). The request check reuses the same reviewer, so it costs one more message, not a new agent.
 - Hook output is trimmed to the last 30–60 lines before it reaches the model.
 - Session cost is always visible in the status line.

@@ -1,4 +1,5 @@
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -11,7 +12,7 @@ SCRIPTS = Path(__file__).resolve().parents[1] / "plugin" / "hooks" / "scripts"
 def run_hook(event: str, payload: dict, cwd: Path | None = None, env: dict | None = None):
     hook_names = {
         "pre-tool": "PreToolUse",
-        "post-tool": "PostToolUse",
+        "stop": "Stop",
         "subagent-start": "SubagentStart",
         "subagent-stop": "SubagentStop",
         "prompt": "UserPromptSubmit",
@@ -26,6 +27,16 @@ def run_hook(event: str, payload: dict, cwd: Path | None = None, env: dict | Non
         env=env,
         check=False,
     )
+
+
+def edit_then_stop(payload: dict, cwd: Path | None = None, env: dict | None = None):
+    """Record an edit the way pre-tool does, then end the main session's turn."""
+    if env is None:
+        state = Path(payload["tool_input"]["file_path"]).parent / ".remi-state"
+        env = os.environ | {"REMI_STATE_DIR": str(state)}
+    run_hook("pre-tool", payload, cwd=cwd, env=env)
+    stop_payload = {"session_id": payload["session_id"], "cwd": payload["cwd"], "stop_hook_active": False}
+    return run_hook("stop", stop_payload, cwd=cwd, env=env)
 
 
 def git(repo: Path, *args: str) -> None:
@@ -140,7 +151,7 @@ def test_malformed_payload_fails_closed():
 
 
 def test_malformed_payload_ignored_outside_pre_tool():
-    assert dispatch_raw("post-tool", stdin="not json").returncode == 0
+    assert dispatch_raw("stop", stdin="not json").returncode == 0
     assert dispatch_raw("prompt", stdin="[1]").returncode == 0
 
 
@@ -271,10 +282,10 @@ def test_edit_hook_scopes_to_the_edited_files_repository(repo, tmp_path):
     legacy.write_text("x = 1\ntotal_amount = 2\n")
     payload = tool("Edit", cwd=tmp_path.parent, file_path=str(legacy))
     env = {"PATH": "/usr/bin:/bin", "HOME": str(tmp_path), "REMI_STATE_DIR": str(tmp_path / "state")}
-    result = run_hook("post-tool", payload, env=env | {"CLAUDE_PROJECT_DIR": str(tmp_path.parent)})
+    result = edit_then_stop(payload, env=env | {"CLAUDE_PROJECT_DIR": str(tmp_path.parent)})
     assert result.returncode == 0, result.stderr
     legacy.write_text("x = 1\ny = 2\n")
-    result = run_hook("post-tool", payload, env=env | {"CLAUDE_PROJECT_DIR": str(tmp_path.parent)})
+    result = edit_then_stop(payload, env=env | {"CLAUDE_PROJECT_DIR": str(tmp_path.parent)})
     assert result.returncode == 2
     assert "'y'" in result.stderr
     assert "'x'" not in result.stderr
@@ -561,7 +572,7 @@ def test_edit_hook_reports_single_letters(tmp_path):
     source_file = tmp_path / "service.py"
     source_file.write_text('def compute(x: int) -> int:\n    """Double it."""\n    return x * 2\n')
     payload = tool("Edit", cwd=tmp_path, file_path=str(source_file))
-    result = run_hook("post-tool", payload, cwd=tmp_path)
+    result = edit_then_stop(payload, cwd=tmp_path)
     assert result.returncode == 2
     assert "'x'" in result.stderr
 
@@ -881,7 +892,7 @@ def test_change_scope_ranges():
 def test_edit_in_legacy_file_ignores_untouched_legacy_code(legacy_repo):
     legacy_file = legacy_repo / "legacy.py"
     legacy_file.write_text(LEGACY_SOURCE + GOOD_ADDITION)
-    result = run_hook("post-tool", edit_payload(legacy_repo, "legacy.py"), cwd=legacy_repo)
+    result = edit_then_stop(edit_payload(legacy_repo, "legacy.py"), cwd=legacy_repo)
     assert result.returncode == 0, result.stderr
     content = legacy_file.read_text()
     assert "def f(x):" in content and "{  'a':1 }" in content  # legacy lines untouched, not reformatted
@@ -893,7 +904,7 @@ def test_edit_in_legacy_file_flags_only_new_violations(legacy_repo):
     legacy_file.write_text(
         LEGACY_SOURCE + '\n\ndef add_fee(a: int) -> int:\n    """Add the fee."""\n    return a + 1\n'
     )
-    result = run_hook("post-tool", edit_payload(legacy_repo, "legacy.py"), cwd=legacy_repo)
+    result = edit_then_stop(edit_payload(legacy_repo, "legacy.py"), cwd=legacy_repo)
     assert result.returncode == 2
     assert "'a'" in result.stderr
     assert "'x'" not in result.stderr and "'i'" not in result.stderr  # pre-existing names aren't reported
@@ -902,7 +913,7 @@ def test_edit_in_legacy_file_flags_only_new_violations(legacy_repo):
 def test_edit_in_legacy_file_formats_only_changed_range(legacy_repo):
     legacy_file = legacy_repo / "legacy.py"
     legacy_file.write_text(LEGACY_SOURCE + "\nFEES = {  'card':2 }\n")
-    result = run_hook("post-tool", edit_payload(legacy_repo, "legacy.py"), cwd=legacy_repo)
+    result = edit_then_stop(edit_payload(legacy_repo, "legacy.py"), cwd=legacy_repo)
     assert result.returncode == 0, result.stderr
     content = legacy_file.read_text()
     assert 'FEES = {"card": 2}' in content  # the changed line is formatted
@@ -911,7 +922,7 @@ def test_edit_in_legacy_file_formats_only_changed_range(legacy_repo):
 
 def test_new_file_is_checked_in_full(legacy_repo):
     (legacy_repo / "fresh.py").write_text("def compute(x):\n    return x\n")
-    result = run_hook("post-tool", edit_payload(legacy_repo, "fresh.py"), cwd=legacy_repo)
+    result = edit_then_stop(edit_payload(legacy_repo, "fresh.py"), cwd=legacy_repo)
     assert result.returncode == 2
     assert "D103" in result.stderr and "'x'" in result.stderr
 
@@ -1284,3 +1295,79 @@ def test_merge_gate_uses_repo_of_current_directory(repo, tmp_path):
     env = reviewed_change(repo, tmp_path) | {"CLAUDE_PROJECT_DIR": "/"}  # remi launched outside the repo
     result = merge(repo, env)
     assert result.returncode == 0, result.stderr
+
+
+# --- end-of-turn gate (nothing runs per edit) -------------------------------
+
+
+def stop_env(tmp_path: Path) -> dict:
+    return {"REMI_STATE_DIR": str(tmp_path / "state"), "PATH": "/usr/bin:/bin", "HOME": str(tmp_path)}
+
+
+def main_stop(repo: Path, session: str = "turn", *, active: bool = False) -> dict:
+    return {"session_id": session, "cwd": str(repo), "stop_hook_active": active}
+
+
+def test_pre_tool_edit_only_records_and_never_lints(repo, tmp_path):
+    env = stop_env(tmp_path)
+    (repo / "bad.py").write_text("def compute(x):\n    return x\n")
+    payload = tool("Edit", cwd=repo, file_path=str(repo / "bad.py"), old_string="a", new_string="b")
+    payload["session_id"] = "turn"
+    result = run_hook("pre-tool", payload, env=env)
+    assert result.returncode == 0, result.stderr
+    assert (repo / "bad.py").read_text() == "def compute(x):\n    return x\n"  # untouched until the turn ends
+    log = tmp_path / "state" / "turn" / "edits" / "main.txt"
+    assert log.read_text().strip() == str((repo / "bad.py").resolve())
+
+
+def test_pre_tool_records_only_python_files(repo, tmp_path):
+    env = stop_env(tmp_path)
+    payload = tool("Write", cwd=repo, file_path=str(repo / "notes.md"), content="x")
+    payload["session_id"] = "turn"
+    run_hook("pre-tool", payload, env=env)
+    assert not (tmp_path / "state" / "turn" / "edits" / "main.txt").exists()
+
+
+def test_worker_edit_recorded_under_its_agent_id(repo, tmp_path):
+    env = stop_env(tmp_path)
+    payload = tool("Edit", cwd=repo, file_path=str(repo / "service.py"), old_string="a", new_string="b")
+    payload |= {"session_id": "turn", "agent_id": "agent-one"}
+    run_hook("pre-tool", payload, env=env)
+    edits = tmp_path / "state" / "turn" / "edits"
+    assert (edits / "agent-one.txt").is_file() and not (edits / "main.txt").exists()
+
+
+def test_stop_without_python_edits_is_a_no_op(repo, tmp_path):
+    (repo / "bad.py").write_text("def compute(x):\n    return x\n")
+    (repo / "pyproject.toml").write_text('[tool.remi]\ntest = "exit 3"\n')
+    (repo / "tests").mkdir()
+    result = run_hook("stop", main_stop(repo), env=stop_env(tmp_path))
+    assert result.returncode == 0, result.stderr
+
+
+def test_stop_blocks_on_lint_then_lets_go_once(repo, tmp_path):
+    env = stop_env(tmp_path)
+    (repo / "bad.py").write_text("def compute(x):\n    return x\n")
+    payload = tool("Write", cwd=repo, file_path=str(repo / "bad.py"), content="")
+    payload["session_id"] = "turn"
+    run_hook("pre-tool", payload, env=env)
+    result = run_hook("stop", main_stop(repo), env=env)
+    assert result.returncode == 2
+    assert "'x'" in result.stderr
+    assert run_hook("stop", main_stop(repo, active=True), env=env).returncode == 0  # no loop
+
+
+def test_stop_runs_tests_and_clears_log_when_green(repo, tmp_path):
+    env = stop_env(tmp_path)
+    (repo / "pyproject.toml").write_text('[tool.remi]\ntest = "exit 3"\n')
+    (repo / "tests").mkdir()
+    (repo / "good.py").write_text('"""Fees."""\n\nFEE_AMOUNT = 2\n')
+    payload = tool("Write", cwd=repo, file_path=str(repo / "good.py"), content="")
+    payload["session_id"] = "turn"
+    run_hook("pre-tool", payload, env=env)
+    result = run_hook("stop", main_stop(repo), env=env)
+    assert result.returncode == 2
+    assert "Tests are red" in result.stderr
+    (repo / "pyproject.toml").write_text('[tool.remi]\ntest = "true"\n')
+    assert run_hook("stop", main_stop(repo), env=env).returncode == 0
+    assert not (tmp_path / "state" / "turn" / "edits" / "main.txt").exists()
