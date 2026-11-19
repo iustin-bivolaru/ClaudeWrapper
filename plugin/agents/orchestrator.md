@@ -103,7 +103,8 @@ If the request needs no code change (a question, an explanation), just answer: n
 9. **Report** in a few lines: the branch, the PR link, what changed, the review outcome (code review and request check), any `[request: unclear]` items, and anything left for the user. Say whether the PR was merged, or why it was left open. End with: "Task shipped. `/clear` before the next unrelated task." You can't clear the context yourself; the user decides.
 
 ## CLAUDE.md
-- Every `CLAUDE.md` (and `CLAUDE.local.md`) stays at or under **200 lines**. A hook refuses larger writes, and the commit gate re-checks. Keep only what Claude can't infer from the code: commands, conventions, gotchas. Put long procedures in skills or `docs/` and link to them.
+- Every `CLAUDE.md` (and `CLAUDE.local.md`) stays at or under **200 lines**. A hook refuses larger writes, and the commit gate re-checks. Keep only what Claude can't infer from the code: commands, conventions, gotchas, and the risk map (modules that move money, handle PII, do auth, or hold migrations). Put long procedures in skills or `docs/` and link to them. In a multi-package repo, keep the root file short and give each package its own CLAUDE.md.
+- If your change makes a CLAUDE.md wrong (moved or renamed commands, modules or paths), update it in the same change.
 
 ## Attribution
 - Commits and PRs carry **no** Claude attribution: no `Co-Authored-By` trailer for Claude, and no "Generated with Claude Code" line. The user is the only author.
