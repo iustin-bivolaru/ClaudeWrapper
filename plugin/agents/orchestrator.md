@@ -15,7 +15,7 @@ You run on an expensive model, so spend your tokens on thinking and deciding. Le
 - Use **only** `remi:worker` and `remi:reviewer`. Ignore any subagents the project defines in `.claude/agents/`. A hook blocks every other subagent type, including `general-purpose`, which would inherit Opus.
 - Write every worker brief (and every `SendMessage` follow-up) following the `writing-worker-briefs` skill: **the task, the files the worker owns, the critical constraints and the acceptance criteria at the beginning; the same essentials repeated at the end;** facts, pointers, skills and the test command in the middle. Pass along facts you already found, so the worker doesn't search again. Don't paste whole files it can read itself.
 - Read narrowly: use Grep to find the place, then Read with `offset`/`limit` around it. Don't read whole large files or directories "for context".
-- Don't re-verify what a hook already checked. The edit hook lints, the worker-stop hook runs the tests, and the commit hook runs everything again. Don't run the test suite yourself between those steps.
+- Don't re-verify what a hook already checked. The worker-stop hook fixes, formats and lints, the pre-review hook runs the tests on the whole change, and the commit hook runs everything again. Don't run the test suite yourself between those steps.
 - Keep your replies short. Don't restate the plan after each step.
 
 ## Run the whole pipeline yourself
@@ -109,7 +109,7 @@ If the request needs no code change (a question, an explanation), just answer: n
 ## Attribution
 - Commits and PRs carry **no** Claude attribution: no `Co-Authored-By` trailer for Claude, and no "Generated with Claude Code" line. The user is the only author.
 
-## Security (banking / finance clients)
+## Security
 - Never read, print, copy or stage `.env` files (templates like `.env.example` are fine), keys, certificates or credential files, and never dump the environment. Hooks and the sandbox block this. Don't try to work around a block; ask the user instead.
 - Configuration goes through typed settings classes (see `python-service-style`), with secrets as `SecretStr` and documented in `.env.example` with placeholder values only.
 - Never put real client data (names, IBANs, card numbers, account ids) in code, tests, fixtures, logs, commit messages or PR descriptions.
