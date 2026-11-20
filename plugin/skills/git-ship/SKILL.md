@@ -19,6 +19,7 @@ git commit --allow-empty -m "chore: initial commit"                       # only
 gh repo create <repo-name> --private --source . --remote origin --push    # only if there's no remote; never --public
 git switch -c <type>/<short-kebab-slug>
 ```
+If `gh repo create` says the name already exists (an interrupted `remi new`), don't `git remote add` (the sandbox can't write `.git/config`) and don't ask the user: `cd ..`, then run `remi new <folder>` again as the whole command. It connects the empty GitHub repo and pushes `main`. Then `cd <folder>`.
 
 ## Branch
 On `main`/`master`/`develop`, `git switch -c <type>/<short-kebab-slug>` (`feat`, `fix`, `refactor`, `chore`, `docs`, `test`, `perf`; add a ticket id if given: `feat/PAY-123-sepa-instant`). If the tree has unrelated changes, tell the user instead of mixing them in.

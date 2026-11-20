@@ -30,7 +30,9 @@ done
 REMI_HOME="$(cd -P "$(dirname "$src")/.." && pwd)"
 export REMI_HOME
 
-command -v claude >/dev/null || { echo "remi: 'claude' not found on PATH" >&2; exit 127; }
+EMPTY_TREE=4b825dc642cb6eb9a060e54bf8d69288fbee4904  # git's id for a tree with no files
+
+command -v claude >/dev/null ||{ echo "remi: 'claude' not found on PATH" >&2; exit 127; }
 command -v python3 >/dev/null || { echo "remi: 'python3' is required by the hooks" >&2; exit 127; }
 
 # Claude subcommands that don't start a session: pass straight through.
@@ -58,8 +60,15 @@ case "${1:-}" in
     cd -- "$1"
     shift
     if enclosing_repo="$(git rev-parse --show-toplevel 2>/dev/null)"; then
-      echo "remi: '$PWD' is inside the git repository '$enclosing_repo'; create the new project outside it." >&2
-      exit 2
+      # An interrupted `remi new` leaves its own repository: only the empty first commit on main.
+      # Finish that bootstrap (the GitHub remote) instead of refusing: the session can't write .git/config.
+      if [ "$enclosing_repo" = "$(pwd -P)" ] && [ "$(git rev-list --count HEAD 2>/dev/null)" = 1 ] \
+         && [ "$(git rev-parse 'HEAD^{tree}' 2>/dev/null)" = "$EMPTY_TREE" ]; then
+        resume_new_repo=true
+      else
+        echo "remi: '$PWD' is inside the git repository '$enclosing_repo'; create the new project outside it." >&2
+        exit 2
+      fi
     fi ;;
   ship)  # commit, push and PR for the orchestrator (in a session; gated like the hooks); never merges
     shift
@@ -220,11 +229,33 @@ if [ "${in_session_new:-false}" = true ]; then
   [ "$REMI_NEW_REPO" = local ] || REMI_NEW_REPO=github
   is_print_mode=false
 fi
+# Connects the repository to a private GitHub repo and pushes main. It reuses an empty repo of
+# that name (left by an interrupted bootstrap) and never pushes to one that has content.
+connect_github() {
+  local name="$1" url
+  if ! git remote get-url origin >/dev/null 2>&1; then
+    if url="$(gh repo view "$name" --json url,isEmpty -q 'select(.isEmpty) | .url' 2>/dev/null)" && [ -n "$url" ]; then
+      git remote add origin "$url.git"
+      echo "remi: connected the existing empty GitHub repository '$name'."
+    elif gh repo view "$name" >/dev/null 2>&1; then
+      echo "remi: the GitHub repository '$name' already exists and isn't empty; remi won't push to it. Pick another folder name." >&2
+      return 1
+    else
+      gh repo create "$name" --private --source . --remote origin >/dev/null || return 1
+      echo "remi: created the private GitHub repository '$name'."
+    fi
+  fi
+  git push -q -u origin main
+}
+
 if [ "$is_print_mode" = false ] && [ "$REMI_NEW_REPO" != off ] && [ "$PWD" != "$HOME" ] && [ "$PWD" != / ] \
-   && ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+   && { [ "${resume_new_repo:-false}" = true ] || ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; }; then
   project_folder="${PWD##*/}"
   repo_name="$(printf '%s' "$project_folder" | tr -c 'A-Za-z0-9._-' '-')"
   new_repo_choice="$REMI_NEW_REPO"
+  if [ "${resume_new_repo:-false}" = true ]; then
+    [ "$new_repo_choice" = ask ] && new_repo_choice=github  # `remi new` already asked for it
+  fi
   # A folder whose subfolders are repositories holds projects; it isn't one. Point to `remi new`.
   if [ "$new_repo_choice" = ask ] && [ -n "$(find . -mindepth 2 -maxdepth 2 -name .git -print -quit 2>/dev/null)" ]; then
     echo "remi: '$project_folder' holds other projects and isn't one itself. Ask remi for a new project and it creates the folder and its repository here." >&2
@@ -247,18 +278,19 @@ if [ "$is_print_mode" = false ] && [ "$REMI_NEW_REPO" != off ] && [ "$PWD" != "$
     fi
   fi
   if [ "$new_repo_choice" != off ]; then
-    git init -q -b main
-    git commit -q --allow-empty -m "chore: initial commit" || {
-      echo "remi: the first commit failed. Set your git identity (git config --global user.name/user.email) and run remi again." >&2
-      exit 1
-    }
-    echo "remi: created a git repository on main with an empty first commit."
-    if [ "$new_repo_choice" = github ]; then
-      if gh repo create "$repo_name" --private --source . --remote origin --push; then
-        echo "remi: created the private GitHub repository '$repo_name'."
-      else
-        echo "remi: couldn't create the GitHub repository '$repo_name'; the local repository is ready, and remi can create it later in the session." >&2
-      fi
+    if [ "${resume_new_repo:-false}" = true ]; then
+      echo "remi: '$project_folder' already holds the empty repository of an unfinished 'remi new'; finishing it."
+    else
+      git init -q -b main
+      git commit -q --allow-empty -m "chore: initial commit" || {
+        echo "remi: the first commit failed. Set your git identity (git config --global user.name/user.email) and run remi again." >&2
+        exit 1
+      }
+      echo "remi: created a git repository on main with an empty first commit."
+    fi
+    if [ "$new_repo_choice" = github ] && ! connect_github "$repo_name"; then
+      echo "remi: couldn't connect '$project_folder' to GitHub; the local repository is ready. The session can't add the remote (it can't write .git/config): run 'remi new $project_folder' again from the folder above it." >&2
+      [ "${in_session_new:-false}" = true ] && exit 1
     fi
   fi
 fi

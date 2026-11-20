@@ -2,6 +2,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -12,6 +13,7 @@ SCRIPTS = Path(__file__).resolve().parents[1] / "plugin" / "hooks" / "scripts"
 def run_hook(event: str, payload: dict, cwd: Path | None = None, env: dict | None = None):
     hook_names = {
         "pre-tool": "PreToolUse",
+        "post-tool": "PostToolUse",
         "stop": "Stop",
         "subagent-start": "SubagentStart",
         "subagent-stop": "SubagentStop",
@@ -41,6 +43,10 @@ def edit_then_stop(payload: dict, cwd: Path | None = None, env: dict | None = No
 
 def git(repo: Path, *args: str) -> None:
     subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True)
+
+
+def git_output(repo: Path, *args: str) -> str:
+    return subprocess.run(["git", *args], cwd=repo, check=False, capture_output=True, text=True).stdout.strip()
 
 
 @pytest.fixture
@@ -654,7 +660,12 @@ def test_project_defined_agents_blocked(tmp_path):
 
 
 def pipeline_env(tmp_path: Path) -> dict:
-    return {"TMPDIR": str(tmp_path / "state"), "PATH": "/usr/bin:/bin", "HOME": str(tmp_path)}
+    return {
+        "TMPDIR": str(tmp_path / "state"),
+        "PATH": "/usr/bin:/bin",
+        "HOME": str(tmp_path),
+        "REMI_REVIEW_WAIT_SECONDS": "0",
+    }
 
 
 def start_worker(session: str, agent_id: str, env: dict) -> None:
@@ -715,6 +726,38 @@ def test_review_refused_while_workers_run(repo, tmp_path):
     result = run_hook("pre-tool", payload, env=env)
     assert result.returncode == 2
     assert "still running" in result.stderr
+
+
+def test_review_waits_for_a_worker_finishing_its_gate(repo, tmp_path):
+    (tmp_path / "state").mkdir()
+    env = pipeline_env(tmp_path) | {"REMI_REVIEW_WAIT_SECONDS": "30"}
+    start_worker("finishing", "agent-one", env)
+    payload = tool("Agent", cwd=repo, subagent_type="remi:reviewer", prompt="Review the changes against `main`.")
+    payload["session_id"] = "finishing"
+    payload["hook_event_name"] = "PreToolUse"
+    review = subprocess.Popen(
+        [sys.executable, str(SCRIPTS / "dispatch.py"), "pre-tool"],
+        stdin=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=env,
+    )
+    review.stdin.write(json.dumps(payload))
+    review.stdin.close()
+    time.sleep(1)
+    assert run_hook("subagent-stop", worker_stop(repo, "finishing", "agent-one"), env=env).returncode == 0
+    assert review.wait(timeout=30) == 0, review.stderr.read()
+
+
+def test_review_refused_when_a_worker_outlasts_the_wait(repo, tmp_path):
+    (tmp_path / "state").mkdir()
+    env = pipeline_env(tmp_path) | {"REMI_REVIEW_WAIT_SECONDS": "1"}
+    start_worker("slow", "agent-one", env)
+    payload = tool("Agent", cwd=repo, subagent_type="remi:reviewer", prompt="Review the changes against `main`.")
+    payload["session_id"] = "slow"
+    result = run_hook("pre-tool", payload, env=env)
+    assert result.returncode == 2
+    assert "1 worker(s) still running" in result.stderr
 
 
 def test_review_runs_fix_then_gate(repo, tmp_path):
@@ -982,6 +1025,70 @@ def test_new_file_is_checked_in_full(legacy_repo):
     result = edit_then_stop(edit_payload(legacy_repo, "fresh.py"), cwd=legacy_repo)
     assert result.returncode == 2
     assert "D103" in result.stderr and "'x'" in result.stderr
+
+
+def bash_writes(
+    repo: Path, env: dict, files: dict[str, str], agent_id: str | None = None, session: str = "test"
+) -> None:
+    """Run a Bash call through pre-tool and post-tool that writes ``files``, like a heredoc would."""
+    payload = tool("Bash", cwd=repo, command="cat > module.py <<'EOF' ... EOF")
+    payload["tool_use_id"] = "toolu_bash_1"
+    payload["session_id"] = session
+    if agent_id:
+        payload["agent_id"] = agent_id
+    assert run_hook("pre-tool", payload, env=env).returncode == 0
+    for file_name, content in files.items():
+        (repo / file_name).parent.mkdir(parents=True, exist_ok=True)
+        (repo / file_name).write_text(content)
+    run_hook("post-tool", payload, env=env)
+
+
+def end_turn(repo: Path, env: dict):
+    return run_hook("stop", {"session_id": "test", "cwd": str(repo), "stop_hook_active": False}, env=env)
+
+
+def test_python_written_through_bash_is_gated(legacy_repo):
+    env = os.environ | {"REMI_STATE_DIR": str(legacy_repo / ".remi-state")}
+    bash_writes(legacy_repo, env, {"fresh.py": "def compute(x):\n    return x\n"})
+    result = end_turn(legacy_repo, env)
+    assert result.returncode == 2
+    assert "fresh.py" in result.stderr and "D103" in result.stderr
+
+
+def test_bash_edit_log_skips_files_changed_before_the_call(legacy_repo):
+    env = os.environ | {"REMI_STATE_DIR": str(legacy_repo / ".remi-state")}
+    older = legacy_repo / "older.py"
+    older.write_text("def compute(x):\n    return x\n")
+    os.utime(older, (time.time() - 60, time.time() - 60))
+    bash_writes(legacy_repo, env, {"fresh.py": '"""Fresh."""\n\nVALUE = 1\n'})
+    result = end_turn(legacy_repo, env)
+    assert result.returncode == 0, result.stderr  # older.py belongs to someone else
+
+
+def test_worker_gate_lints_files_the_worker_wrote_through_bash(repo, tmp_path):
+    env = os.environ | {"REMI_STATE_DIR": str(tmp_path / "state"), "REMI_REVIEW_WAIT_SECONDS": "0"}
+    start_worker("bash-worker", "agent-one", env)
+    start_worker("bash-worker", "agent-two", env)  # still running: only agent-one's own files are linted
+    bash_writes(
+        repo,
+        env,
+        {"tests/test_jobs.py": "class FakeJobs:\n    def Run(self):\n        pass\n"},
+        "agent-one",
+        "bash-worker",
+    )
+    result = run_hook("subagent-stop", worker_stop(repo, "bash-worker", "agent-one"), env=env)
+    assert result.returncode == 2
+    assert "tests/test_jobs.py" in result.stderr and "N802" in result.stderr
+
+
+def test_migrations_need_no_docstrings(legacy_repo):
+    migration = legacy_repo / "alembic" / "versions" / "0001_baseline.py"
+    migration.parent.mkdir(parents=True)
+    migration.write_text(
+        '"""Baseline."""\n\n\ndef upgrade() -> None:\n    pass\n\n\ndef downgrade() -> None:\n    pass\n'
+    )
+    result = edit_then_stop(edit_payload(legacy_repo, "alembic/versions/0001_baseline.py"), cwd=legacy_repo)
+    assert result.returncode == 0, result.stderr
 
 
 def test_commit_gate_passes_clean_change_in_legacy_file(legacy_repo):
@@ -1259,7 +1366,25 @@ def test_launcher_starts_when_github_ready(tmp_path, scopes):
     assert "CLAUDE STARTED" in result.stdout
 
 
-GH_READY = 'case "$1" in api) printf \'HTTP/2.0 200 OK\\n\\n{}\' ;; *) echo "gh $*" >> "$HOME/gh.log" ;; esac'
+# A fake gh: logged in; `repo create` makes a bare repo under $HOME and adds it as origin;
+# `repo view` finds it once it exists (empty unless $HOME/remote-has-content exists).
+GH_READY = r"""case "$1 $2" in
+  api*) printf 'HTTP/2.0 200 OK\n\n{}' ;;
+  "repo view") echo "gh $*" >> "$HOME/gh.log"; [ -d "$HOME/remote.git" ] || exit 1
+    case "$*" in *isEmpty*) [ -e "$HOME/remote-has-content" ] || echo "$HOME/remote" ;; esac ;;
+  "repo create") echo "gh $*" >> "$HOME/gh.log"; git init -q --bare "$HOME/remote.git"
+    git remote add origin "$HOME/remote.git" ;;
+  *) echo "gh $*" >> "$HOME/gh.log" ;;
+esac"""
+
+
+def remote_branches(tmp_path: Path) -> str:
+    remote = tmp_path / "remote.git"
+    if not remote.is_dir():
+        return ""
+    return subprocess.run(
+        ["git", "branch", "--format=%(refname:short)"], cwd=remote, capture_output=True, text=True
+    ).stdout
 
 
 def new_project(tmp_path: Path) -> Path:
@@ -1280,9 +1405,11 @@ def test_launcher_bootstraps_new_project(tmp_path, choice, remote):
     branch = subprocess.run(["git", "branch", "--show-current"], cwd=project, capture_output=True, text=True)
     assert branch.stdout.strip() == "main"
     gh_log = tmp_path / "gh.log"
-    assert (gh_log.exists() and gh_log.read_text()) == (
-        "gh repo create my-game --private --source . --remote origin --push\n" if remote else False
-    )
+    if remote:
+        assert "gh repo create my-game --private --source . --remote origin\n" in gh_log.read_text()
+        assert remote_branches(tmp_path).split() == ["main"]
+    else:
+        assert not gh_log.exists()
 
 
 @pytest.mark.parametrize("choice", ["ask", "off"])
@@ -1353,6 +1480,60 @@ def test_remi_new_in_a_session_takes_one_plain_folder_name(tmp_path, args):
 
 def test_remi_new_in_a_session_refuses_a_folder_inside_a_repository(tmp_path, repo):
     result = run_launcher(tmp_path, GH_READY, cwd=repo, args=("new", "nested"), CLAUDECODE="1")
+    assert result.returncode == 2
+    assert "inside the git repository" in result.stderr
+
+
+def unfinished_new_project(tmp_path: Path, name: str) -> Path:
+    """A folder left by an interrupted `remi new`: only the empty first commit, no origin."""
+    project = tmp_path / name
+    project.mkdir()
+    git(project, "init", "-q", "-b", "main")
+    git(
+        project,
+        "-c",
+        "user.name=t",
+        "-c",
+        "user.email=t@example.com",
+        "commit",
+        "-q",
+        "--allow-empty",
+        "-m",
+        "chore: initial commit",
+    )
+    return project
+
+
+@pytest.mark.parametrize("github_repo_exists", [True, False])
+def test_remi_new_in_a_session_finishes_an_unfinished_bootstrap(tmp_path, github_repo_exists):
+    project = unfinished_new_project(tmp_path, "bank-api")
+    if github_repo_exists:
+        git(tmp_path, "init", "-q", "--bare", str(tmp_path / "remote.git"))
+    result = run_launcher(tmp_path, GH_READY, args=("new", "bank-api"), CLAUDECODE="1")
+    assert result.returncode == 0, result.stderr
+    assert "cd bank-api" in result.stdout
+    assert git_output(project, "remote", "get-url", "origin") == str(tmp_path / "remote.git")
+    assert remote_branches(tmp_path).split() == ["main"]
+    assert ("gh repo create" in (tmp_path / "gh.log").read_text()) != github_repo_exists
+
+
+def test_remi_new_never_pushes_to_a_github_repo_with_content(tmp_path):
+    project = unfinished_new_project(tmp_path, "bank-api")
+    git(tmp_path, "init", "-q", "--bare", str(tmp_path / "remote.git"))
+    (tmp_path / "remote-has-content").touch()
+    result = run_launcher(tmp_path, GH_READY, args=("new", "bank-api"), CLAUDECODE="1")
+    assert result.returncode == 1
+    assert "isn't empty" in result.stderr
+    assert git_output(project, "remote") == ""
+    assert remote_branches(tmp_path) == ""
+
+
+def test_remi_new_refuses_an_existing_project_repository(tmp_path):
+    project = unfinished_new_project(tmp_path, "bank-api")
+    (project / "app.py").write_text("x = 1\n")
+    git(project, "add", "app.py")
+    git(project, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "-m", "feat: app")
+    result = run_launcher(tmp_path, GH_READY, args=("new", "bank-api"), CLAUDECODE="1")
     assert result.returncode == 2
     assert "inside the git repository" in result.stderr
 

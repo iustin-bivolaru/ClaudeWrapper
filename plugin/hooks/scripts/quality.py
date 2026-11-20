@@ -13,7 +13,7 @@ Handlers, called by ``dispatch.py``:
                its slot is freed either way. For a reviewer, it records the verdict
                for the merge gate (``merge_gate.py``).
 * ``review`` - PreToolUse on Agent: before ``remi:reviewer`` starts, every worker
-               must be done, and fix + format + lint + tests must pass on the
+               must be done (it waits a little for one whose stop gate is still running), and fix + format + lint + tests must pass on the
                whole change. A red gate refuses the review.
 
 Legacy-safe: a file that already exists in ``HEAD`` is only held to the rules on the
@@ -45,6 +45,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import tomllib
 from pathlib import Path
 from typing import Any
@@ -59,6 +60,7 @@ from merge_gate import record_review  # noqa: E402
 from naming import short_name_violations  # noqa: E402
 from scope import ChangeScope, change_scope, original_text, repository_path  # noqa: E402
 
+REVIEW_WAIT_POLL_SECONDS = 2.0
 MAX_OUTPUT_LINES = 60  # keep feedback short: every line goes into the context window
 DOCSTRING_RULES = "D101,D102,D103,D106,D419"  # style-neutral: works for reST and Google
 NAMING_RULES = "N801,N802,N803,N806,N815,N816"  # pep8-naming: snake_case variables
@@ -312,6 +314,21 @@ def _is_test_file(file_path: Path) -> bool:
     return file_path.name.startswith("test_") or file_path.name == "conftest.py"
 
 
+def _is_migration(file_path: Path) -> bool:
+    """Tell whether a file is a generated migration (Alembic or Django; docstring rules don't apply).
+
+    Args:
+        file_path: The file.
+
+    Returns:
+        True for files under ``alembic/versions/``, ``migrations/versions/`` or a Django ``migrations/`` folder.
+    """
+    folders = file_path.parent.parts
+    return (len(folders) >= 2 and folders[-1] == "versions" and folders[-2] in {"alembic", "migrations"}) or (
+        bool(folders) and folders[-1] == "migrations"
+    )
+
+
 def _committed_version_is_clean(ruff: str, root: Path, file_path: Path, original: str, *, check: str) -> bool:
     """Tell whether the ``HEAD`` version of a file already passed a ruff check.
 
@@ -372,7 +389,7 @@ def _scoped_ruff_problems(ruff: str, root: Path, file_path: Path, scope: ChangeS
     """
     rules = (
         f"{NAMING_RULES},{HOUSE_RULES}"
-        if _is_test_file(file_path)
+        if _is_test_file(file_path) or _is_migration(file_path)
         else f"{DOCSTRING_RULES},{NAMING_RULES},{HOUSE_RULES}"
     )
     exit_code, output = run_stdout(
@@ -952,6 +969,31 @@ def on_stop(payload: dict[str, Any]) -> int:
     return ALLOW
 
 
+def _wait_for_workers(payload: dict[str, Any]) -> int:
+    """Wait a little for running workers to finish before the review.
+
+    A worker's report reaches the orchestrator before its stop gate (lint, tests) has
+    finished and freed its slot, so a review launched right after the last report would
+    be refused for nothing.
+
+    Args:
+        payload: PreToolUse payload for the Agent tool.
+
+    Returns:
+        The number of workers still running after the wait (``REMI_REVIEW_WAIT_SECONDS``, default 180).
+    """
+    try:
+        wait_seconds = max(0.0, float(os.environ.get("REMI_REVIEW_WAIT_SECONDS", "180")))
+    except ValueError:
+        wait_seconds = 180.0
+    deadline = time.monotonic() + wait_seconds
+    while True:
+        still_running = running_workers(payload, excluding_self=False)
+        if not still_running or time.monotonic() >= deadline:
+            return still_running
+        time.sleep(min(REVIEW_WAIT_POLL_SECONDS, max(0.0, deadline - time.monotonic())))
+
+
 def on_review(payload: dict[str, Any]) -> int:
     """Gate the reviewer: all workers are done and the whole change is green.
 
@@ -967,7 +1009,7 @@ def on_review(payload: dict[str, Any]) -> int:
     agent_type = str((payload.get("tool_input") or {}).get("subagent_type") or "")
     if not agent_type.endswith("reviewer"):
         return ALLOW
-    still_running = running_workers(payload, excluding_self=False)
+    still_running = _wait_for_workers(payload)
     if still_running:
         block(f"{still_running} worker(s) still running. Wait until every worker has finished, then start the review.")
     root = project_dir(payload)
