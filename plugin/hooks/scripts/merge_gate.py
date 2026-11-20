@@ -8,7 +8,8 @@
   session as a hand-back prompt, which catches a request check that SubagentStop missed.
 * PreToolUse on Bash - ``gh pr merge`` is allowed only when the user's latest message
   asks for a merge (``merge_requested``), the latest reviewer said
-  ``VERDICT: APPROVE`` and ``REQUEST: MATCHES``, every file in HEAD is exactly what it
+  ``VERDICT: APPROVE`` and ``REQUEST: MATCHES`` (or the user said "merge anyway",
+  which overrules the verdict but nothing else), every file in HEAD is exactly what it
   reviewed, and the merge is pinned to HEAD with ``--match-head-commit``. A file
   that matches the base branch came from it (a rebase onto or merge of the base) and
   needs no new review. ``--admin`` is never allowed.
@@ -35,6 +36,7 @@ HANDBACK_TOOL = "SubagentHandback"
 HANDBACK_SENDER = re.compile(r'\A(?:Another Claude session sent a message:\s*)?<agent-message from="([\w-]+)"')
 MERGE_COMMAND = re.compile(r"\bgh\s+pr\s+merge\b")
 MERGE_WORD = re.compile(r"(?i)\bmerge\b")
+MERGE_OVERRULE = re.compile(r"(?i)\banyways?\b")
 MERGE_REFUSED = re.compile(r"(?i)\b(?:don[’']?t|do\s+not|never|not|no|without)\s+(?:\w+\s+){0,2}merg")
 MAX_LISTED_PATHS = 5
 BASE_REFS = ("origin/HEAD", "origin/main", "origin/master", "main", "master")
@@ -289,10 +291,7 @@ def check_merge(payload: dict[str, Any]) -> int:
         return ALLOW
     if re.search(r"\s--admin\b", command):
         block("`gh pr merge --admin` bypasses branch protection. remi never uses it.")
-    reason = merge_requested(payload)
-    if reason:
-        block(reason)
-    head, reason = reviewed_head(payload)
+    head, reason = may_merge(payload)
     if reason:
         block(reason)
     pinned = re.search(r"--match-head-commit[=\s]+([0-9a-f]{40})\b", command)
@@ -304,13 +303,14 @@ def check_merge(payload: dict[str, Any]) -> int:
     return ALLOW
 
 
-def reviewed_head(payload: dict[str, Any]) -> tuple[str, str]:
+def reviewed_head(payload: dict[str, Any], *, overrule: bool = False) -> tuple[str, str]:
     """Check HEAD against the latest review.
 
-    Shared by the ``gh pr merge`` hook and ``remi ship``, which merges inside its own process.
+    Shared by the ``gh pr merge`` hook, ``remi ship`` (to report) and ``remi merge``.
 
     Args:
         payload: Payload with the session id and the working directory.
+        overrule: The user said "merge anyway": accept any verdict, but still only the reviewed code.
 
     Returns:
         ``(full HEAD sha, "")`` when the merge may go ahead, else ``("", reason)``.
@@ -322,11 +322,11 @@ def reviewed_head(payload: dict[str, Any]) -> tuple[str, str]:
             "no finished review covers this change, so remi doesn't merge it. Merging needs the latest "
             "reviewer's VERDICT: APPROVE and REQUEST: MATCHES. Leave the PR open for the user."
         )
-    if state.get("verdict") != "APPROVE" or state.get("request") != "MATCHES":
+    if not overrule and (state.get("verdict") != "APPROVE" or state.get("request") != "MATCHES"):
         return "", (
             f"the latest review said VERDICT: {state.get('verdict', 'none')}, "
-            f"REQUEST: {state.get('request', 'none')}. remi merges only after VERDICT: APPROVE and REQUEST: MATCHES. "
-            "Leave the PR open and tell the user why."
+            f"REQUEST: {state.get('request', 'none')}. remi merges only after VERDICT: APPROVE and REQUEST: MATCHES, "
+            'unless the user says "merge anyway". Leave the PR open and tell the user why.'
         )
     root = project_dir(payload)
     try:
@@ -348,25 +348,41 @@ def reviewed_head(payload: dict[str, Any]) -> tuple[str, str]:
     return head, ""
 
 
-def merge_requested(payload: dict[str, Any]) -> str:
+def merge_requested(payload: dict[str, Any]) -> tuple[bool, str]:
     """Check that the user's latest message asks for a merge.
 
     remi never merges on its own: the user's most recent message (recorded by the
     prompt hook, hand-backs excluded) must say "merge", and not "don't merge".
+    "merge anyway" also overrules a review that didn't approve.
 
     Args:
         payload: Payload with the session id.
 
     Returns:
-        ``""`` when the user asked for the merge, else the reason to refuse.
+        ``(overrule, "")`` when the user asked for the merge, else ``(False, reason)``.
     """
     from agent_policy import _recorded_requests
 
     recorded = _recorded_requests(payload)
     latest = recorded[-1] if recorded else ""
     if MERGE_WORD.search(latest) and not MERGE_REFUSED.search(latest):
-        return ""
-    return (
+        return bool(MERGE_OVERRULE.search(latest)), ""
+    return False, (
         "remi merges only when the user's latest message asks for it, and it doesn't. Leave the PR open "
         'and tell the user to say "merge" when they want it merged.'
     )
+
+
+def may_merge(payload: dict[str, Any]) -> tuple[str, str]:
+    """Check the user's request and the review before a merge.
+
+    Args:
+        payload: Payload with the session id and the working directory.
+
+    Returns:
+        ``(full HEAD sha, "")`` when the merge may go ahead, else ``("", reason)``.
+    """
+    overrule, reason = merge_requested(payload)
+    if reason:
+        return "", reason
+    return reviewed_head(payload, overrule=overrule)

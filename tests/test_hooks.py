@@ -1407,6 +1407,28 @@ def test_merge_without_the_user_asking_blocked(repo, tmp_path, message):
     assert "asks for it" in result.stderr
 
 
+@pytest.mark.parametrize(("verdict", "request_result"), [("CHANGES_REQUESTED", "MATCHES"), ("APPROVE", "GAPS")])
+def test_merge_anyway_overrules_the_verdict(repo, tmp_path, verdict, request_result):
+    env = reviewed_change(repo, tmp_path, verdict, request_result)
+    result = merge(repo, env, asked="the findings are wrong, merge it anyway")
+    assert result.returncode == 0, result.stderr
+
+
+def test_merge_anyway_still_needs_the_reviewed_code(repo, tmp_path):
+    env = reviewed_change(repo, tmp_path, "CHANGES_REQUESTED")
+    (repo / "service.py").write_text("ANSWER = 43\n")
+    git(repo, "commit", "-qam", "fix: tweak after review")
+    result = merge(repo, env, asked="merge anyway")
+    assert result.returncode == 2
+    assert "service.py" in result.stderr
+
+
+def test_merge_anyway_still_needs_a_review(repo, tmp_path):
+    result = merge(repo, review_env(tmp_path), asked="merge anyway")
+    assert result.returncode == 2
+    assert "no finished review" in result.stderr
+
+
 def test_merge_request_ignores_handbacks(repo, tmp_path):
     env = reviewed_change(repo, tmp_path)
     record_prompt("thanks", "merge", env)
@@ -1849,6 +1871,24 @@ def test_remi_merge_refuses_without_an_approving_review(repo, tmp_path):
     result = remi_merge(repo, env | {"GH_PR_LIST": '[{"number": 7, "url": "u"}]'})
     assert result.returncode == 2 and "no finished review" in result.stderr
     assert "pr merge" not in gh_calls(tmp_path)
+
+
+def test_remi_merge_anyway_overrules_gaps(repo, tmp_path):
+    env = ship_setup(repo, tmp_path)
+    (repo / "service.py").write_text('"""Service."""\n\nANSWER = 42\n')
+    start_reviewer("ship", "reviewer-one", env)
+    reviewer_stops(repo, "ship", "reviewer-one", "VERDICT: APPROVE", env)
+    reviewer_stops(repo, "ship", "reviewer-one", "REQUEST: GAPS", env)
+    (tmp_path / "state" / "ship" / "request-check-due").unlink(missing_ok=True)
+    assert ship(repo, tmp_path, env).returncode == 0
+    env |= {"GH_PR_LIST": '[{"number": 7, "url": "u"}]'}
+    record_prompt("merge", "ship", env)
+    refused = remi_merge(repo, env)
+    assert refused.returncode == 2 and "merge anyway" in refused.stderr
+    record_prompt("Merge anyway", "ship", env)
+    result = remi_merge(repo, env)
+    assert result.returncode == 0, result.stderr
+    assert "pr merge 7" in gh_calls(tmp_path)
 
 
 def test_remi_merge_refuses_without_an_open_pr(repo, tmp_path):

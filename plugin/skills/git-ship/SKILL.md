@@ -64,7 +64,7 @@ What it does, so you don't repeat it: stages what you staged (else everything no
 - **Keep it current:** when new commits change what the PR does, rewrite `.remi-pr.md` and run `remi ship` again; it updates the PR's title and body. Describe the PR as it is now, not the review rounds.
 
 ## Merge
-Only when the user's message asks for it ("merge", "merge it"): run `remi merge` as the whole command. It merges the current branch's open PR with `--match-head-commit --merge --delete-branch`, only when the user's latest message asks for a merge and the **latest** review said `VERDICT: APPROVE` and `REQUEST: MATCHES` on exactly HEAD. Never merge on your own and never run `gh pr merge` yourself. A fix after the approval needs a new review. If `remi merge` refuses, tell the user why.
+Only when the user's message asks for it ("merge", "merge it"): run `remi merge` as the whole command. It merges the current branch's open PR with `--match-head-commit --merge --delete-branch`, only when the user's latest message asks for a merge and the **latest** review said `VERDICT: APPROVE` and `REQUEST: MATCHES` on exactly HEAD. Never merge on your own and never run `gh pr merge` yourself. A fix after the approval needs a new review. If `remi merge` refuses because of the verdict, tell the user why; they can say "merge anyway" to overrule the verdict (never the reviewed-code check).
 
 ## Report
 Branch, commit hashes, PR URL, and whether the PR can be merged once the user says "merge", or why not.

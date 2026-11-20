@@ -14,7 +14,7 @@ Everything mechanical happens here, in one command:
 
 ``remi merge`` merges the branch's open PR with ``--match-head-commit``, only when the
 user's latest message asks for a merge and the latest review said ``APPROVE`` +
-``MATCHES`` on exactly this code.
+``MATCHES`` on exactly this code. "merge anyway" overrules the verdict, not the code check.
 
 Git hooks never see the ``git commit`` and ``gh pr merge`` run here, so the same gate
 functions are called directly. The command runs outside the sandbox (``gh`` needs the
@@ -247,10 +247,7 @@ def merge_main(arguments: list[str]) -> int:
     payload = session_payload()
     root = project_dir(payload)
     branch = feature_branch(root)
-    reason = merge_gate.merge_requested(payload)
-    if reason:
-        block(reason)
-    head, reason = merge_gate.reviewed_head(payload)
+    head, reason = merge_gate.may_merge(payload)
     if reason:
         block(reason)
     listed = must(root, "gh", "pr", "list", "--head", branch, "--state", "open", "--json", "number,url")
