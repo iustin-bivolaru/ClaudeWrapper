@@ -33,7 +33,7 @@ Interactive sessions start with the remi hamster (set `REMI_NO_BANNER=1` to hide
 
 ```
  ▗█▖ ▗█▖   remi
- ▟▀███▀▙   orchestrator opus/medium · workers sonnet/medium 1–3 by size · reviewer opus/medium
+ ▟▀███▀▙   orchestrator opus/medium · workers sonnet/medium 1–3 by size · reviewer opus/medium (S: low)
  ▜█████▛   sandbox on · secrets guarded · branch feat/x
   ▘▘ ▝▝    shift+tab cycles modes (plan · accept edits · default)
 ```
@@ -94,7 +94,7 @@ Start in a mode with `remi --plan`, `remi --permission-mode acceptEdits`, or `RE
 |---|---|---|---|
 | Orchestrator | `REMI_ORCHESTRATOR_MODEL` = `opus` | `REMI_ORCHESTRATOR_EFFORT` = `medium` | also `--model` / `--effort` |
 | Worker | `REMI_WORKER_MODEL` = `sonnet` | `REMI_WORKER_EFFORT` = `medium` | |
-| Reviewer | `REMI_REVIEWER_MODEL` = `opus` | `REMI_REVIEWER_EFFORT` = `medium` | |
+| Reviewer | `REMI_REVIEWER_MODEL` = `opus` | `REMI_REVIEWER_EFFORT` = `medium` | `REMI_REVIEWER_S_EFFORT` = `low` for size-S tasks |
 
 Turn limits per agent: `REMI_WORKER_MAX_TURNS` (`50`), and `REMI_REVIEWER_MAX_TURNS` (`25`). The orchestrator has none: you drive the main session. Plus `REMI_MAX_WORKERS` (`3`), `REMI_PERMISSION_MODE` (starting mode), `REMI_NEW_REPO` (`ask`; see *New projects ship too*) and `REMI_NO_BANNER`. Effort is one of `low`, `medium`, `high`, `xhigh` or `max`. Precedence is **CLI flag > environment > config file > default**. To make a setting persistent, put it in `~/.config/remi/config`:
 
