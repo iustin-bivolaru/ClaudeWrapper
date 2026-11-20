@@ -60,9 +60,12 @@ case "${1:-}" in
       echo "remi: '$PWD' is inside the git repository '$enclosing_repo'; create the new project outside it." >&2
       exit 2
     fi ;;
-  ship)  # commit, push, PR and merge for the orchestrator (in a session; gated like the hooks)
+  ship)  # commit, push and PR for the orchestrator (in a session; gated like the hooks); never merges
     shift
     exec python3 "$REMI_HOME/plugin/hooks/scripts/ship.py" "$@" ;;
+  merge)  # merge the branch's PR, only when the user's latest message asks for it and the review approved it
+    shift
+    exec python3 "$REMI_HOME/plugin/hooks/scripts/ship.py" merge "$@" ;;
 esac
 
 # --- configuration -------------------------------------------------------------

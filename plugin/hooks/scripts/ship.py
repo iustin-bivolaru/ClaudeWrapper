@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""``remi ship``: commit, push, open or update the PR, and merge when the review allows it.
+"""``remi ship``: commit, push, open or update the PR. ``remi merge``: merge it when the user asks.
 
 The orchestrator writes only the text: the commit message, the PR title and the PR body.
 Everything mechanical happens here, in one command:
@@ -10,8 +10,11 @@ Everything mechanical happens here, in one command:
    tests) and commit.
 3. Check the branch's PR: a merged or closed PR means a push would never reach the base.
 4. ``git push origin HEAD``, then ``gh pr create`` (or ``gh pr edit`` to keep it current).
-5. Merge with ``--match-head-commit`` when the latest review said ``APPROVE`` + ``MATCHES``
-   on exactly this code; otherwise leave the PR open and say why.
+5. Report whether the review would allow a merge. ``remi ship`` never merges.
+
+``remi merge`` merges the branch's open PR with ``--match-head-commit``, only when the
+user's latest message asks for a merge and the latest review said ``APPROVE`` +
+``MATCHES`` on exactly this code. "merge anyway" overrules the verdict, not the code check.
 
 Git hooks never see the ``git commit`` and ``gh pr merge`` run here, so the same gate
 functions are called directly. The command runs outside the sandbox (``gh`` needs the
@@ -20,6 +23,7 @@ keychain), like the hooks themselves. The guard only allows it as a standalone c
 Usage::
 
     remi ship -m "feat(x): add y" [-m "<why>"] --title "Add y to x" [--body-file .remi-pr.md]
+    remi merge
 """
 
 from __future__ import annotations
@@ -183,24 +187,78 @@ def open_pull_request(root: Path, branch: str, options: argparse.Namespace) -> t
     return url.rstrip("/").rsplit("/", 1)[-1], url
 
 
-def merge(root: Path, payload: dict[str, str], number: str) -> str:
-    """Merge the PR when the latest review approved exactly this code.
+def merge_status(payload: dict[str, str]) -> str:
+    """Say whether the PR could be merged once the user asks.
 
     Args:
-        root: Repository directory.
         payload: Session id and working directory, as the gates expect.
-        number: The PR number.
 
     Returns:
         A line for the report.
     """
     import merge_gate
 
-    head, reason = merge_gate.reviewed_head(payload)
+    _head, reason = merge_gate.reviewed_head(payload)
     if reason:
-        return f"left open: {reason}"
+        return f"left open, not mergeable yet: {reason}"
+    return 'left open: the review approved this code. remi merges only when the user says "merge".'
+
+
+def session_payload() -> dict[str, str]:
+    """Build the gates' payload from the session environment.
+
+    Returns:
+        Session id and working directory.
+    """
+    session = os.environ.get("CLAUDE_CODE_SESSION_ID", "")
+    if not session:
+        block("remi ship and remi merge run inside a remi session: CLAUDE_CODE_SESSION_ID is not set.")
+    return {"session_id": session, "cwd": os.getcwd()}
+
+
+def feature_branch(root: Path) -> str:
+    """Return the current branch, refusing a protected branch or a detached HEAD.
+
+    Args:
+        root: Repository directory.
+
+    Returns:
+        The feature branch.
+    """
+    branch = run(root, "git", "symbolic-ref", "--short", "-q", "HEAD").stdout.strip()
+    if not branch or branch in PROTECTED_BRANCHES:
+        block(f"ship from a feature branch, not '{branch or 'a detached HEAD'}': git switch -c <type>/<short-slug>")
+    return branch
+
+
+def merge_main(arguments: list[str]) -> int:
+    """Merge the current branch's open PR, when the user asked and the review allows it.
+
+    Args:
+        arguments: Arguments after ``remi merge`` (none are accepted).
+
+    Returns:
+        Process exit code: 0 when merged, 2 when refused.
+    """
+    import merge_gate
+
+    if arguments:
+        block("remi merge takes no arguments: it merges the current branch's open PR.")
+    payload = session_payload()
+    root = project_dir(payload)
+    branch = feature_branch(root)
+    head, reason = merge_gate.may_merge(payload)
+    if reason:
+        block(reason)
+    listed = must(root, "gh", "pr", "list", "--head", branch, "--state", "open", "--json", "number,url")
+    pull_requests = json.loads(listed or "[]")
+    if not pull_requests:
+        block(f"'{branch}' has no open PR. Run remi ship first.")
+    number, url = str(pull_requests[0]["number"]), pull_requests[0]["url"]
     must(root, "gh", "pr", "merge", number, "--merge", "--delete-branch", "--match-head-commit", head)
-    return f"merged {head[:7]}"
+    (root / DEFAULT_BODY_FILE).unlink(missing_ok=True)  # kept while the PR was open, for the next ship
+    print(f"[remi merge] merged PR #{number} at {head[:7]}: {url}")
+    return 0
 
 
 def main(arguments: list[str]) -> int:
@@ -210,25 +268,20 @@ def main(arguments: list[str]) -> int:
         arguments: Arguments after ``remi ship``.
 
     Returns:
-        Process exit code: 0 when shipped (merged or left open), 2 when refused.
+        Process exit code: 0 when shipped (the PR is left open), 2 when refused.
     """
+    if arguments[:1] == ["merge"]:
+        return merge_main(arguments[1:])
     options = parse(arguments)
-    session = os.environ.get("CLAUDE_CODE_SESSION_ID", "")
-    if not session:
-        block("remi ship runs inside a remi session: CLAUDE_CODE_SESSION_ID is not set.")
-    payload = {"session_id": session, "cwd": os.getcwd()}
+    payload = session_payload()
     root = project_dir(payload)
-    branch = run(root, "git", "symbolic-ref", "--short", "-q", "HEAD").stdout.strip()
-    if not branch or branch in PROTECTED_BRANCHES:
-        block(f"ship from a feature branch, not '{branch or 'a detached HEAD'}': git switch -c <type>/<short-slug>")
+    branch = feature_branch(root)
     options.body_file = options.body_file or root / DEFAULT_BODY_FILE
     check_text(options)
     report = [f"branch {branch}", commit(root, payload, options.message, options.body_file)]
     number, url = open_pull_request(root, branch, options)
     report.append(f"PR #{number}: {url}")
-    report.append(merge(root, payload, number))
-    if report[-1].startswith("merged") and options.body_file == root / DEFAULT_BODY_FILE:
-        options.body_file.unlink(missing_ok=True)  # kept while the PR is open, for the next ship
+    report.append(merge_status(payload))
     print("\n".join(f"[remi ship] {line}" for line in report))
     return 0
 

@@ -49,6 +49,7 @@
       "Bash(gh auth status)",
       "Bash(gh auth status *)",
       "Bash(remi ship *)",
+      "Bash(remi merge)",
       "Bash(remi new *)"
     ],
     "ask": [
@@ -114,6 +115,8 @@
       "git fetch *",
       "gh *",
       "remi ship *",
+      "remi merge",
+      "remi merge *",
       "remi new *"
     ],
     "filesystem": {

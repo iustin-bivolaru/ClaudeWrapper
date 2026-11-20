@@ -1375,7 +1375,9 @@ def reviewed_change(repo: Path, tmp_path: Path, verdict: str = "APPROVE", reques
     return env
 
 
-def merge(repo: Path, env: dict, extra: str = "", pin: bool = True):
+def merge(repo: Path, env: dict, extra: str = "", pin: bool = True, asked: str | None = "looks good, merge it"):
+    if asked is not None:
+        record_prompt(asked, "merge", env)
     head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True).stdout.strip()
     command = "gh pr merge --merge --delete-branch" + (f" --match-head-commit {head}" if pin else "") + extra
     payload = tool("Bash", cwd=repo, command=command)
@@ -1395,6 +1397,43 @@ def test_merge_without_approval_and_match_blocked(repo, tmp_path, verdict, reque
     result = merge(repo, env)
     assert result.returncode == 2
     assert f"VERDICT: {verdict}, REQUEST: {request_result}" in result.stderr
+
+
+@pytest.mark.parametrize("message", ["add a notes file", "don't merge yet", "please do not merge it", "ship it"])
+def test_merge_without_the_user_asking_blocked(repo, tmp_path, message):
+    env = reviewed_change(repo, tmp_path)
+    result = merge(repo, env, asked=message)
+    assert result.returncode == 2
+    assert "asks for it" in result.stderr
+
+
+@pytest.mark.parametrize(("verdict", "request_result"), [("CHANGES_REQUESTED", "MATCHES"), ("APPROVE", "GAPS")])
+def test_merge_anyway_overrules_the_verdict(repo, tmp_path, verdict, request_result):
+    env = reviewed_change(repo, tmp_path, verdict, request_result)
+    result = merge(repo, env, asked="the findings are wrong, merge it anyway")
+    assert result.returncode == 0, result.stderr
+
+
+def test_merge_anyway_still_needs_the_reviewed_code(repo, tmp_path):
+    env = reviewed_change(repo, tmp_path, "CHANGES_REQUESTED")
+    (repo / "service.py").write_text("ANSWER = 43\n")
+    git(repo, "commit", "-qam", "fix: tweak after review")
+    result = merge(repo, env, asked="merge anyway")
+    assert result.returncode == 2
+    assert "service.py" in result.stderr
+
+
+def test_merge_anyway_still_needs_a_review(repo, tmp_path):
+    result = merge(repo, review_env(tmp_path), asked="merge anyway")
+    assert result.returncode == 2
+    assert "no finished review" in result.stderr
+
+
+def test_merge_request_ignores_handbacks(repo, tmp_path):
+    env = reviewed_change(repo, tmp_path)
+    record_prompt("thanks", "merge", env)
+    handback = '<agent-message from="reviewer-one">VERDICT: APPROVE, ready to merge</agent-message>'
+    assert merge(repo, env, asked=handback).returncode == 2
 
 
 def test_merge_without_review_blocked(repo, tmp_path):
@@ -1716,7 +1755,7 @@ def test_fingerprint_leaves_the_real_index_alone(counted_repo):
     assert tree_fingerprint(repo) == working_tree  # deterministic
 
 
-# --- remi ship: commit, push, PR and merge in one gated command ------------------------
+# --- remi ship: commit, push and PR in one gated command; remi merge on request ------------
 
 FAKE_GH = """#!/bin/sh
 echo "$*" >> "$GH_LOG"
@@ -1774,18 +1813,92 @@ def test_ship_commits_pushes_and_leaves_unreviewed_pr_open(repo, tmp_path):
     assert "pr merge" not in calls
 
 
-def test_ship_merges_after_approve_and_matches(repo, tmp_path):
+def approve(repo: Path, tmp_path: Path, env: dict, session: str = "ship") -> None:
+    start_reviewer(session, "reviewer-one", env)
+    reviewer_stops(repo, session, "reviewer-one", "VERDICT: APPROVE\n- nothing", env)
+    reviewer_stops(repo, session, "reviewer-one", "Request check:\nREQUEST: MATCHES", env)
+    (tmp_path / "state" / session / "request-check-due").unlink(missing_ok=True)  # the request was sent
+
+
+def remi_merge(repo: Path, env: dict, *arguments: str):
+    command = [sys.executable, str(SCRIPTS / "ship.py"), "merge", *arguments]
+    return subprocess.run(command, cwd=repo, env=env, capture_output=True, text=True, check=False)
+
+
+def test_ship_never_merges_even_after_approval(repo, tmp_path):
+    env = ship_setup(repo, tmp_path)
+    (repo / "service.py").write_text('"""Service."""\n\nANSWER = 42\n')
+    approve(repo, tmp_path, env)
+    record_prompt("add the service and merge it", "ship", env)
+    result = ship(repo, tmp_path, env)
+    assert result.returncode == 0, result.stderr
+    assert "left open: the review approved" in result.stdout
+    assert "pr merge" not in gh_calls(tmp_path)
+
+
+def test_remi_merge_merges_when_the_user_asks(repo, tmp_path):
+    env = ship_setup(repo, tmp_path)
+    (repo / "service.py").write_text('"""Service."""\n\nANSWER = 42\n')
+    (repo / ".remi-pr.md").write_text("## What\nThe service.\n")
+    approve(repo, tmp_path, env)
+    assert ship(repo, tmp_path, env).returncode == 0
+    record_prompt("Merge it", "ship", env)
+    env |= {"GH_PR_LIST": '[{"number": 7, "url": "https://github.com/owner/repo/pull/7"}]'}
+    result = remi_merge(repo, env)
+    assert result.returncode == 0, result.stderr
+    head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True).stdout.strip()
+    assert f"pr merge 7 --merge --delete-branch --match-head-commit {head}" in gh_calls(tmp_path)
+    assert "merged PR #7" in result.stdout
+    assert not (repo / ".remi-pr.md").exists()
+
+
+def test_remi_merge_refuses_without_the_user_asking(repo, tmp_path):
+    env = ship_setup(repo, tmp_path)
+    (repo / "service.py").write_text('"""Service."""\n\nANSWER = 42\n')
+    approve(repo, tmp_path, env)
+    assert ship(repo, tmp_path, env).returncode == 0
+    record_prompt("thanks, looks fine", "ship", env)
+    result = remi_merge(repo, env | {"GH_PR_LIST": '[{"number": 7, "url": "u"}]'})
+    assert result.returncode == 2 and "asks for it" in result.stderr
+    assert "pr merge" not in gh_calls(tmp_path)
+
+
+def test_remi_merge_refuses_without_an_approving_review(repo, tmp_path):
+    env = ship_setup(repo, tmp_path)
+    (repo / "notes.txt").write_text("hello\n")
+    assert ship(repo, tmp_path, env).returncode == 0
+    record_prompt("merge", "ship", env)
+    result = remi_merge(repo, env | {"GH_PR_LIST": '[{"number": 7, "url": "u"}]'})
+    assert result.returncode == 2 and "no finished review" in result.stderr
+    assert "pr merge" not in gh_calls(tmp_path)
+
+
+def test_remi_merge_anyway_overrules_gaps(repo, tmp_path):
     env = ship_setup(repo, tmp_path)
     (repo / "service.py").write_text('"""Service."""\n\nANSWER = 42\n')
     start_reviewer("ship", "reviewer-one", env)
-    reviewer_stops(repo, "ship", "reviewer-one", "VERDICT: APPROVE\n- nothing", env)
-    reviewer_stops(repo, "ship", "reviewer-one", "Request check:\nREQUEST: MATCHES", env)
-    (tmp_path / "state" / "ship" / "request-check-due").unlink(missing_ok=True)  # the request was sent
-    result = ship(repo, tmp_path, env)
+    reviewer_stops(repo, "ship", "reviewer-one", "VERDICT: APPROVE", env)
+    reviewer_stops(repo, "ship", "reviewer-one", "REQUEST: GAPS", env)
+    (tmp_path / "state" / "ship" / "request-check-due").unlink(missing_ok=True)
+    assert ship(repo, tmp_path, env).returncode == 0
+    env |= {"GH_PR_LIST": '[{"number": 7, "url": "u"}]'}
+    record_prompt("merge", "ship", env)
+    refused = remi_merge(repo, env)
+    assert refused.returncode == 2 and "merge anyway" in refused.stderr
+    record_prompt("Merge anyway", "ship", env)
+    result = remi_merge(repo, env)
     assert result.returncode == 0, result.stderr
-    head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True).stdout.strip()
-    assert f"pr merge 7 --merge --delete-branch --match-head-commit {head}" in gh_calls(tmp_path), result.stdout
-    assert "merged" in result.stdout
+    assert "pr merge 7" in gh_calls(tmp_path)
+
+
+def test_remi_merge_refuses_without_an_open_pr(repo, tmp_path):
+    env = ship_setup(repo, tmp_path)
+    (repo / "service.py").write_text('"""Service."""\n\nANSWER = 42\n')
+    approve(repo, tmp_path, env)
+    assert ship(repo, tmp_path, env).returncode == 0
+    record_prompt("merge", "ship", env)
+    result = remi_merge(repo, env)
+    assert result.returncode == 2 and "no open PR" in result.stderr
 
 
 def test_ship_does_not_merge_a_change_made_after_the_review(repo, tmp_path):
@@ -1851,21 +1964,6 @@ def test_ship_uses_and_removes_the_default_body_file(repo, tmp_path):
     assert ".remi-pr.md" in gh_calls(tmp_path)
 
 
-def test_ship_removes_the_default_body_file_once_merged(repo, tmp_path):
-    env = ship_setup(repo, tmp_path)
-    (repo / "service.py").write_text('"""Service."""\n\nANSWER = 42\n')
-    (repo / ".remi-pr.md").write_text("## What\nThe service.\n")
-    start_reviewer("ship", "reviewer-one", env)
-    reviewer_stops(repo, "ship", "reviewer-one", "VERDICT: APPROVE", env)
-    reviewer_stops(repo, "ship", "reviewer-one", "REQUEST: MATCHES", env)
-    (tmp_path / "state" / "ship" / "request-check-due").unlink(missing_ok=True)
-    command = [sys.executable, str(SCRIPTS / "ship.py"), "-m", "feat: add service", "--title", "Add the service"]
-    result = subprocess.run(command, cwd=repo, env=env, capture_output=True, text=True, check=False)
-    assert result.returncode == 0, result.stderr
-    assert "merged" in result.stdout
-    assert not (repo / ".remi-pr.md").exists()
-
-
 def test_ship_refuses_a_merged_pr(repo, tmp_path):
     env = ship_setup(repo, tmp_path) | {"GH_PR_LIST": '[{"number": 3, "state": "MERGED", "url": "u"}]'}
     (repo / "notes.txt").write_text("hello\n")
@@ -1896,6 +1994,18 @@ def test_guard_allows_remi_new_only_bare(repo, command):
 
 def test_guard_allows_plain_remi_new(tmp_path):
     result = run_hook("pre-tool", tool("Bash", cwd=tmp_path, command="remi new bank-api"))
+    assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize("command", ["cd /x && remi merge", "remi merge; ls", "remi merge | tee log"])
+def test_guard_allows_remi_merge_only_bare(repo, command):
+    result = run_hook("pre-tool", tool("Bash", cwd=repo, command=command))
+    assert result.returncode == 2, command
+    assert "remi merge" in result.stderr
+
+
+def test_guard_allows_plain_remi_merge(repo):
+    result = run_hook("pre-tool", tool("Bash", cwd=repo, command="remi merge"))
     assert result.returncode == 0, result.stderr
 
 
