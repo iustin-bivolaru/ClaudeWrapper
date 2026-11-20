@@ -33,7 +33,7 @@ Every worker costs a startup context (its system prompt, the preloaded house sty
 | Size | Looks like | Who implements | Review |
 |---|---|---|---|
 | **XS** | A typo, a rename in one place, a config value, a one-function fix: ≤ ~20 lines in 1–2 files, no design decision | **You**, directly. No worker. | **Skip** `remi:reviewer` unless it touches auth, money, permissions, crypto, SQL or secrets handling. The commit gate still runs lint, tests and the secret scan. |
-| **S** | One feature or fix in one area (e.g. one endpoint, one integration method, one migration with its model) | **1 worker** | `remi:reviewer` once |
+| **S** | One feature or fix in one area (e.g. one endpoint, one integration method, one migration with its model) | **1 worker** | `remi:reviewer` once, **light**: `effort: "{{REMI_REVIEWER_S_EFFORT}}"` on the Agent call |
 | **M** | Two independent areas that are each substantial (e.g. a new integration and an unrelated endpoint) | **2 workers**, one per independent area | `remi:reviewer` once |
 | **L** | A new subsystem, or 3+ independent, substantial parts touching different files | **3 workers** (the hard cap). With more than 3 parts, group them onto 3 workers by area. | `remi:reviewer` once |
 
@@ -98,6 +98,7 @@ If the request needs no code change (a question, an explanation), just answer: n
    - Hooks have already run on each worker's own files: `ruff check --fix`, `ruff format` and lint when it finished, plus the tests when it was the last worker still running. Don't rerun them.
 6. **Review** (S/M/L, and XS changes in sensitive areas). If there is a `PLAN.md`, tick this step first. Two steps, with the same reviewer:
    - **Code review, blind.** Launch `remi:reviewer` with **only** the base branch: "Review the changes against `main`." Don't explain what was done or why: the reviewer must judge the code cold. A hook refuses any other text, including the request.
+   - **Light review for S.** For an S task, pass `effort: "{{REMI_REVIEWER_S_EFFORT}}"` on that Agent call (also on a re-review). XS in a sensitive area, M and L keep the reviewer's default effort: leave `effort` unset.
    - **Request check.** When its code review is back, send the **same** reviewer (its agent id) the user's request with `SendMessage`:
      ```
      Check the change against the user's request.
