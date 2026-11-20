@@ -50,6 +50,8 @@
       "Bash(gh auth status *)",
       "Bash(remi ship *)",
       "Bash(remi merge)",
+      "Bash(remi comments)",
+      "Bash(remi comments *)",
       "Bash(remi new *)"
     ],
     "ask": [
@@ -117,6 +119,8 @@
       "remi ship *",
       "remi merge",
       "remi merge *",
+      "remi comments",
+      "remi comments *",
       "remi new *"
     ],
     "filesystem": {

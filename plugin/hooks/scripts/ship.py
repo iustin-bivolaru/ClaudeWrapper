@@ -10,7 +10,8 @@ Everything mechanical happens here, in one command:
    tests) and commit.
 3. Check the branch's PR: a merged or closed PR means a push would never reach the base.
 4. ``git push origin HEAD``, then ``gh pr create`` (or ``gh pr edit`` to keep it current).
-5. Report whether the review would allow a merge. ``remi ship`` never merges.
+5. Post the replies to PR comments in ``.remi-replies.json`` (see ``pr_comments.py``).
+6. Report whether the review would allow a merge. ``remi ship`` never merges.
 
 ``remi merge`` merges the branch's open PR with ``--match-head-commit``, only when the
 user's latest message asks for a merge and the latest review said ``APPROVE`` +
@@ -24,6 +25,7 @@ Usage::
 
     remi ship -m "feat(x): add y" [-m "<why>"] --title "Add y to x" [--body-file .remi-pr.md]
     remi merge
+    remi comments [<PR number>]
 """
 
 from __future__ import annotations
@@ -41,6 +43,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from _common import block, is_secret_path, project_dir  # noqa: E402
 from conventional_commits import header_problems  # noqa: E402
 from guard import PROTECTED_BRANCHES  # noqa: E402
+from pr_comments import REPLIES_FILE, load_replies, post_replies  # noqa: E402
 
 DEFAULT_BODY_FILE = ".remi-pr.md"
 ATTRIBUTION = re.compile(r"(?i)co-authored-by:\s*claude|noreply@anthropic\.com|generated\s+with\s+\[?claude")
@@ -126,15 +129,16 @@ def commit(root: Path, payload: dict[str, str], messages: list[str], body_file: 
         root: Repository directory.
         payload: Session id and working directory, as the gates expect.
         messages: Commit message paragraphs.
-        body_file: The PR body file, never committed when it lies inside the repository.
+        body_file: The PR body file, never committed when it lies inside the repository (nor .remi-pr.md or the replies).
 
     Returns:
         A line for the report.
     """
     if not run(root, "git", "diff", "--cached", "--name-only").stdout.strip():
         must(root, "git", "add", "-A")
-    if body_file.resolve().is_relative_to(root.resolve()):
-        run(root, "git", "reset", "-q", "--", str(body_file.resolve().relative_to(root.resolve())))
+    for kept_out in (body_file, root / DEFAULT_BODY_FILE, root / REPLIES_FILE):
+        if kept_out.resolve().is_relative_to(root.resolve()) and kept_out.exists():
+            run(root, "git", "reset", "-q", "--", str(kept_out.resolve().relative_to(root.resolve())))
     staged = run(root, "git", "diff", "--cached", "--name-only").stdout.split()
     if not staged:
         return "nothing new to commit"
@@ -278,12 +282,17 @@ def main(arguments: list[str]) -> int:
     branch = feature_branch(root)
     options.body_file = options.body_file or root / DEFAULT_BODY_FILE
     check_text(options)
+    replies = load_replies(payload, root, branch)
+    if ATTRIBUTION.search(json.dumps(replies)):
+        block("Claude attribution is not allowed in PR comment replies; the user is the sole author.")
     report = [f"branch {branch}", commit(root, payload, options.message, options.body_file)]
     number, url = open_pull_request(root, branch, options)
     report.append(f"PR #{number}: {url}")
+    if replies:
+        report += post_replies(payload, root, number, replies)
     report.append(merge_status(payload))
     print("\n".join(f"[remi ship] {line}" for line in report))
-    return 0
+    return 2 if any(line.startswith("FAILED") for line in report) else 0
 
 
 if __name__ == "__main__":
