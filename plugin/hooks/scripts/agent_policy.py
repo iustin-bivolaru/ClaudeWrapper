@@ -360,7 +360,7 @@ def on_pre(payload: dict[str, Any]) -> int:
     if agent_type == "Explore":
         block(
             "the built-in 'Explore' runs on the session's model (Opus). Use Grep and Read yourself, with "
-            "offset/limit for large files: starting any subagent costs about 20k tokens."
+            "offset/limit for large files: starting any subagent costs about 12–15k tokens."
         )
     if agent_type not in ALLOWED_AGENT_TYPES:
         block(
