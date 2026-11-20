@@ -692,6 +692,20 @@ def test_last_worker_runs_tests(repo, tmp_path):
     assert "Tests are red" in result.stderr
 
 
+def test_red_worker_frees_its_slot(repo, tmp_path):
+    (tmp_path / "state").mkdir()
+    env = pipeline_env(tmp_path)
+    (repo / "pyproject.toml").write_text('[tool.remi]\nfix = "true"\ntest = "exit 3"\n')
+    (repo / "tests").mkdir()
+    start_worker("red-worker", "agent-one", env)
+    assert run_hook("subagent-stop", worker_stop(repo, "red-worker", "agent-one"), env=env).returncode == 2
+    payload = tool("Agent", cwd=repo, subagent_type="remi:reviewer", prompt="Review the changes against `main`.")
+    payload["session_id"] = "red-worker"
+    result = run_hook("pre-tool", payload, env=env)
+    assert result.returncode == 2
+    assert "still running" not in result.stderr  # the real failure, not a worker that looks busy
+
+
 def test_review_refused_while_workers_run(repo, tmp_path):
     (tmp_path / "state").mkdir()
     env = pipeline_env(tmp_path)
