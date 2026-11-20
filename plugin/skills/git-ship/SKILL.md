@@ -24,7 +24,7 @@ git switch -c <type>/<short-kebab-slug>
 On `main`/`master`/`develop`, `git switch -c <type>/<short-kebab-slug>` (`feat`, `fix`, `refactor`, `chore`, `docs`, `test`, `perf`; add a ticket id if given: `feat/PAY-123-sepa-instant`). If the tree has unrelated changes, tell the user instead of mixing them in.
 
 ## Ship
-1. Write the PR body (see Pull request) with the Write tool to `.remi-pr.md` at the repository root. It is never committed, and `remi ship` deletes it once the PR is up.
+1. Write the PR body (see Pull request) with the Write tool to `.remi-pr.md` at the repository root. It is never committed, and `remi ship` deletes it once the PR is merged (it stays while the PR is open).
 2. Run, as the whole command (no `cd x &&` in front; no `$`, backticks, `;`, `&`, `|`, `<`, `>` anywhere, because it runs outside the sandbox):
    ```bash
    remi ship -m "<type>(<scope>): <imperative, lowercase, no period, ≤ 72 chars>" -m "<why>" --title "<plain PR title>"

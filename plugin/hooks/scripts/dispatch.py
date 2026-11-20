@@ -15,7 +15,8 @@ Events:
 * ``subagent-start`` - SubagentStart: turn a worker's reservation into a slot.
 * ``subagent-stop``  - SubagentStop: the worker gate, or record a reviewer's verdict.
 * ``stop``           - Stop: the main session's end-of-turn gate, only if it edited Python.
-* ``prompt``         - UserPromptSubmit: record the user's message for the request check.
+* ``prompt``         - UserPromptSubmit: record the user's message for the request check,
+                       or a reviewer's hand-back for the merge gate.
 
 A malformed payload blocks a PreToolUse call (fail closed) and is ignored elsewhere.
 """
@@ -113,7 +114,7 @@ def subagent_stop(payload: dict[str, Any]) -> int:
 
 
 def prompt(payload: dict[str, Any]) -> int:
-    """Record the user's message.
+    """Record the user's message, or a reviewer's hand-back.
 
     Args:
         payload: UserPromptSubmit payload.
@@ -122,7 +123,9 @@ def prompt(payload: dict[str, Any]) -> int:
         Always 0.
     """
     import agent_policy
+    import merge_gate
 
+    merge_gate.record_handback(payload)
     return agent_policy.on_prompt(payload)
 
 
