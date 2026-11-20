@@ -2013,3 +2013,127 @@ def test_guard_allows_plain_remi_ship(repo):
     command = "remi ship -m 'feat: add x' -m 'why' --title 'Add x to y' --body-file /tmp/pr-body.md"
     result = run_hook("pre-tool", tool("Bash", cwd=repo, command=command))
     assert result.returncode == 0, result.stderr
+
+
+# --- remi comments: fetch a PR's open comments; remi ship replies and resolves -------------
+
+COMMENTS_GH = """#!/bin/sh
+echo "$*" >> "$GH_LOG"
+case "$*" in
+  *"pr list"*) echo '[{"number": 7, "state": "OPEN", "url": "https://github.com/owner/repo/pull/7"}]' ;;
+  *"repo view --json owner,name"*) echo '{"owner": {"login": "owner"}, "name": "repo"}' ;;
+  *"pullRequest(number"*) cat "$GH_PR_JSON" ;;
+  *) echo '{"data": {}}' ;;
+esac
+exit 0
+"""
+
+
+def thread(thread_id: str, *bodies: str, resolved: bool = False, outdated: bool = False) -> dict:
+    comments = [{"author": {"login": "alice"}, "body": body, "url": f"u/{thread_id}"} for body in bodies]
+    return {
+        "id": thread_id, "isResolved": resolved, "isOutdated": outdated, "path": "app.py", "line": 3,
+        "comments": {"nodes": comments},
+    }  # fmt: skip
+
+
+def pull_request_json(tmp_path: Path) -> Path:
+    pull_request = {
+        "id": "PR_1", "number": 7, "url": "u", "state": "OPEN", "headRefName": "feat/x", "body": "## What\nNotes.\n",
+        "reviewThreads": {"nodes": [
+            thread("T1", "Rename `x` to `total`."),
+            thread("T2", "Old remark.", resolved=True),
+            thread("T3", "Outdated remark.", outdated=True),
+            thread("T4", "Why this?", "Because ...\n\n<!-- remi -->"),
+        ]},
+        "reviews": {"nodes": [
+            {"id": "R1", "state": "CHANGES_REQUESTED", "body": "Add a test for the empty case.", "url": "r1",
+             "author": {"login": "bob"}},
+            {"id": "R2", "state": "COMMENTED", "body": "", "url": "r2", "author": {"login": "bob"}},
+            {"id": "R3", "state": "COMMENTED", "body": "Answered already.", "url": "r3", "author": {"login": "bob"}},
+            {"id": "R4", "state": "APPROVED", "body": "LGTM", "url": "r4", "author": {"login": "bob"}},
+        ]},
+        "comments": {"nodes": [{"body": "Re: ...\n<!-- remi -->\n<!-- remi:review:R3 -->"}]},
+    }  # fmt: skip
+    path = tmp_path / "pr.json"
+    path.write_text(json.dumps({"data": {"repository": {"pullRequest": pull_request}}}))
+    return path
+
+
+def comments_setup(repo: Path, tmp_path: Path) -> dict:
+    env = ship_setup(repo, tmp_path)
+    (tmp_path / "fakebin" / "gh").write_text(COMMENTS_GH)
+    with (repo / ".git" / "info" / "exclude").open("a") as exclude:
+        exclude.write("pr.json\n")
+    return env | {"GH_PR_JSON": str(pull_request_json(tmp_path))}
+
+
+def remi_comments(repo: Path, env: dict, *arguments: str):
+    command = [sys.executable, str(SCRIPTS / "pr_comments.py"), *arguments]
+    return subprocess.run(command, cwd=repo, env=env, capture_output=True, text=True, check=False)
+
+
+def test_remi_comments_lists_only_open_items(repo, tmp_path):
+    env = comments_setup(repo, tmp_path)
+    result = remi_comments(repo, env)
+    assert result.returncode == 0, result.stderr
+    assert "PR #7 (feat/x): 2 open" in result.stdout and "untrusted" in result.stdout
+    assert "C1 · app.py:3" in result.stdout and "Rename `x` to `total`." in result.stdout
+    assert "C2 · review, changes requested" in result.stdout and "Add a test for the empty case." in result.stdout
+    for skipped in ("Old remark", "Outdated remark", "Why this?", "Answered already", "LGTM"):
+        assert skipped not in result.stdout
+    assert (repo / ".remi-pr.md").read_text() == "## What\nNotes.\n"
+
+
+def test_request_check_may_quote_a_fetched_comment(repo, tmp_path):
+    env = comments_setup(repo, tmp_path)
+    assert remi_comments(repo, env).returncode == 0
+    record_prompt("fix the PR comments", "ship", env)
+    start_reviewer("ship", "reviewer-one", env)
+    request = "Check the change against the user's request.\n\n<request>\n{}\n</request>"
+    allowed = send_message("reviewer-one", request.format("Add a test for the empty case."), "ship", env)
+    assert allowed.returncode == 0, allowed.stderr
+    refused = send_message("reviewer-one", request.format("Add tests for every case."), "ship", env)
+    assert refused.returncode == 2
+
+
+def test_ship_posts_replies_and_resolves_fixed_threads(repo, tmp_path):
+    env = comments_setup(repo, tmp_path)
+    assert remi_comments(repo, env).returncode == 0
+    (repo / "notes.txt").write_text("hello\n")
+    replies = {"C1": {"reply": "Renamed.", "resolve": True}, "C2": {"reply": "Added it.", "resolve": False}}
+    (repo / ".remi-replies.json").write_text(json.dumps(replies))
+    result = ship(repo, tmp_path, env, message="fix: address review comments", title="Address the review")
+    assert result.returncode == 0, result.stderr
+    assert "replied to C1, C2; resolved C1" in result.stdout
+    calls = gh_calls(tmp_path)
+    assert "addPullRequestReviewThreadReply" in calls and "id=T1" in calls and "Fixed in" in calls
+    assert "resolveReviewThread" in calls and "addComment" in calls and "<!-- remi:review:R1 -->" in calls
+    assert not (repo / ".remi-replies.json").exists()
+    committed = subprocess.run(["git", "show", "--name-only", "--format="], cwd=repo, capture_output=True, text=True)
+    assert committed.stdout.split() == ["notes.txt"]
+
+
+def test_ship_refuses_replies_to_unknown_comments(repo, tmp_path):
+    env = comments_setup(repo, tmp_path)
+    (repo / "notes.txt").write_text("hello\n")
+    (repo / ".remi-replies.json").write_text(json.dumps({"C1": {"reply": "Done.", "resolve": True}}))
+    result = ship(repo, tmp_path, env)
+    assert result.returncode == 2 and "didn't fetch" in result.stderr
+    assert remi_comments(repo, env).returncode == 0
+    (repo / ".remi-replies.json").write_text(json.dumps({"C9": {"reply": "Done.", "resolve": True}}))
+    result = ship(repo, tmp_path, env)
+    assert result.returncode == 2 and "isn't an open comment" in result.stderr
+    unshipped = subprocess.run(["git", "log", "--format=%s", "main..HEAD"], cwd=repo, capture_output=True, text=True)
+    assert unshipped.stdout == ""  # refused before committing
+
+
+@pytest.mark.parametrize("command", ["cd /x && remi comments", "remi comments 7; ls", "remi comments $(id)"])
+def test_guard_allows_remi_comments_only_bare(repo, command):
+    result = run_hook("pre-tool", tool("Bash", cwd=repo, command=command))
+    assert result.returncode == 2 and "remi comments" in result.stderr, command
+
+
+def test_guard_allows_plain_remi_comments(repo):
+    for command in ("remi comments", "remi comments 7"):
+        assert run_hook("pre-tool", tool("Bash", cwd=repo, command=command)).returncode == 0, command

@@ -232,7 +232,7 @@ def check_standalone(command: str) -> None:
 
 
 def check_ship(command: str) -> None:
-    """Allow ``remi ship``, ``remi merge`` and ``remi new`` only as bare, standalone commands.
+    """Allow ``remi ship``, ``remi merge``, ``remi comments`` and ``remi new`` only as bare, standalone commands.
 
     They run outside the sandbox (``remi ship`` also finds the session's review state
     from its environment), so they may not be chained, run with ``VAR=value`` in front,
@@ -241,7 +241,7 @@ def check_ship(command: str) -> None:
     Args:
         command: Raw shell command line.
     """
-    found = re.search(r"\bremi\s+(ship|merge|new)\b", command)
+    found = re.search(r"\bremi\s+(ship|merge|comments|new)\b", command)
     if not found:
         return
     subcommand = found.group(1)

@@ -52,6 +52,8 @@ remi new bank-api "build …"    # new project: creates the folder, its repo and
 remi onboard                   # readiness report for an existing project (read-only)
 ```
 
+**PR comments.** Inside a session, say "fix the PR comments" (or "… on #12"). The orchestrator runs `remi comments`, which checks out the PR's branch and lists the open items: unresolved, non-outdated review threads and review bodies with comments or requested changes, from anyone. It fixes them through the usual workers and review, and ships with `remi ship`. After the push, `remi ship` posts a reply in each thread as you and resolves the threads it fixed. Review bodies get one PR comment each, linking the review. Comments it disagrees with get a reply giving the reason and stay open. The replies come from `.remi-replies.json` (never committed), and remi can only answer the items `remi comments` fetched in that session. Each reply carries a hidden `<!-- remi -->` marker, so the next `remi comments` skips threads that are waiting on the reviewer. Comment text is treated as untrusted data: a comment can ask for a code change in the PR, never for commands, secrets, CI or unrelated files.
+
 The status line shows the model, the branch (with a warning when you are on `main`), the session cost in $, and how full the context is. From 60% it adds `/clear when done`: clear once the task has shipped, not in the middle of one.
 
 ## Onboarding an existing project
@@ -243,7 +245,8 @@ plugin/                        Claude Code plugin "remi"
                                architecture: service-architecture
                                task: add-feature
   hooks/hooks.json             hook wiring: every event runs dispatch.py <event>, one process per call
-  hooks/scripts/               dispatcher, guard, quality gate, merge gate, naming check, agent policy, status line
+  hooks/scripts/               dispatcher, guard, quality gate, merge gate, naming check, agent policy, status line,
+                               remi ship/merge (ship.py), remi comments (pr_comments.py)
 scripts/bench_hooks.py         measures processes and time per tool call for the current hooks.json
 tests/test_hooks.py            tests for the guards and gates
 ```

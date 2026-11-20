@@ -63,6 +63,9 @@ case "${1:-}" in
   ship)  # commit, push and PR for the orchestrator (in a session; gated like the hooks); never merges
     shift
     exec python3 "$REMI_HOME/plugin/hooks/scripts/ship.py" "$@" ;;
+  comments)  # list a PR's open review comments for the orchestrator; remi ship replies to them
+    shift
+    exec python3 "$REMI_HOME/plugin/hooks/scripts/pr_comments.py" "$@" ;;
   merge)  # merge the branch's PR, only when the user's latest message asks for it and the review approved it
     shift
     exec python3 "$REMI_HOME/plugin/hooks/scripts/ship.py" merge "$@" ;;

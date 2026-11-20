@@ -296,13 +296,17 @@ def on_message(payload: dict[str, Any]) -> int:
             'the request check carries no context either: one instruction line ("Check the change against the '
             "user's request.\") plus the user's messages in <request>...</request>. No plan, no reasons."
         )
-    recorded = [_normalise(message) for message in _recorded_requests(payload) + _question_answers(payload)]
+    from pr_comments import comment_texts
+
+    sources = _recorded_requests(payload) + _question_answers(payload) + comment_texts(payload)
+    recorded = [_normalise(message) for message in sources]
     if not recorded:
         block("no user message is recorded for this session, so there is no request to check against.")
     for quote in quotes:
         if not quote or not any(quote in message for message in recorded):
             block(
-                "a <request> block is not a verbatim quote of a user message. Copy the user's words exactly; "
+                "a <request> block is not a verbatim quote of a user message or a fetched PR comment. Copy the "
+                "words exactly; "
                 f"don't summarise or reword them. Not found: {quote[:120]!r}"
             )
     due_file = state_dir(payload) / REQUEST_CHECK_DUE_FILE
