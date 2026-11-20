@@ -1,4 +1,4 @@
-"""Merge gate: remi merges its own PR only after an approving, matching review.
+"""Merge gate: remi merges a PR only when the user asks, and only after an approving, matching review.
 
 * ``record_review`` - called from ``quality.py worker`` when a reviewer stops. The
   code review's ``VERDICT`` is stored with a snapshot (path -> git blob id) of every
@@ -6,7 +6,8 @@
   to it. A new reviewer starts a fresh record.
 * ``record_handback`` - called on UserPromptSubmit: the same report reaches the main
   session as a hand-back prompt, which catches a request check that SubagentStop missed.
-* PreToolUse on Bash - ``gh pr merge`` is allowed only when the latest reviewer said
+* PreToolUse on Bash - ``gh pr merge`` is allowed only when the user's latest message
+  asks for a merge (``merge_requested``), the latest reviewer said
   ``VERDICT: APPROVE`` and ``REQUEST: MATCHES``, every file in HEAD is exactly what it
   reviewed, and the merge is pinned to HEAD with ``--match-head-commit``. A file
   that matches the base branch came from it (a rebase onto or merge of the base) and
@@ -33,6 +34,8 @@ REQUEST_PATTERN = re.compile(r"REQUEST:\s*(MATCHES|GAPS)")
 HANDBACK_TOOL = "SubagentHandback"
 HANDBACK_SENDER = re.compile(r'\A(?:Another Claude session sent a message:\s*)?<agent-message from="([\w-]+)"')
 MERGE_COMMAND = re.compile(r"\bgh\s+pr\s+merge\b")
+MERGE_WORD = re.compile(r"(?i)\bmerge\b")
+MERGE_REFUSED = re.compile(r"(?i)\b(?:don[’']?t|do\s+not|never|not|no|without)\s+(?:\w+\s+){0,2}merg")
 MAX_LISTED_PATHS = 5
 BASE_REFS = ("origin/HEAD", "origin/main", "origin/master", "main", "master")
 
@@ -286,6 +289,9 @@ def check_merge(payload: dict[str, Any]) -> int:
         return ALLOW
     if re.search(r"\s--admin\b", command):
         block("`gh pr merge --admin` bypasses branch protection. remi never uses it.")
+    reason = merge_requested(payload)
+    if reason:
+        block(reason)
     head, reason = reviewed_head(payload)
     if reason:
         block(reason)
@@ -340,3 +346,27 @@ def reviewed_head(payload: dict[str, Any]) -> tuple[str, str]:
             "review (both steps) before remi merges."
         )
     return head, ""
+
+
+def merge_requested(payload: dict[str, Any]) -> str:
+    """Check that the user's latest message asks for a merge.
+
+    remi never merges on its own: the user's most recent message (recorded by the
+    prompt hook, hand-backs excluded) must say "merge", and not "don't merge".
+
+    Args:
+        payload: Payload with the session id.
+
+    Returns:
+        ``""`` when the user asked for the merge, else the reason to refuse.
+    """
+    from agent_policy import _recorded_requests
+
+    recorded = _recorded_requests(payload)
+    latest = recorded[-1] if recorded else ""
+    if MERGE_WORD.search(latest) and not MERGE_REFUSED.search(latest):
+        return ""
+    return (
+        "remi merges only when the user's latest message asks for it, and it doesn't. Leave the PR open "
+        'and tell the user to say "merge" when they want it merged.'
+    )
