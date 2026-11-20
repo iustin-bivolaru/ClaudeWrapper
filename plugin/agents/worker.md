@@ -4,7 +4,7 @@ description: Implementation worker. Use for any code change the orchestrator del
 model: sonnet
 effort: medium
 maxTurns: 50
-disallowedTools: Agent
+tools: Read, Grep, Glob, Edit, Write, Bash, Skill, LSP
 skills:
   - remi:python-service-style
   - remi:ponytail
