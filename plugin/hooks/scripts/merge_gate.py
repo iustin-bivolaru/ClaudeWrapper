@@ -18,6 +18,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 import sys
@@ -310,7 +311,8 @@ def reviewed_head(payload: dict[str, Any], *, overrule: bool = False) -> tuple[s
 
     Args:
         payload: Payload with the session id and the working directory.
-        overrule: The user said "merge anyway": accept any verdict, but still only the reviewed code.
+        overrule: The user said "merge anyway": accept any verdict, but still only the reviewed code
+            (with ``REMI_RE_REVIEW=off`` also fixes made after the review, which never get a second one).
 
     Returns:
         ``(full HEAD sha, "")`` when the merge may go ahead, else ``("", reason)``.
@@ -339,12 +341,15 @@ def reviewed_head(payload: dict[str, Any], *, overrule: bool = False) -> tuple[s
     if not isinstance(snapshot, dict):
         return "", "the review didn't record which files it saw, so the merge can't be checked. Leave the PR open."
     unreviewed = unreviewed_paths(snapshot, state.get("tracked") or [], committed, base)
-    if unreviewed:
+    re_review_off = os.environ.get("REMI_RE_REVIEW") == "off"
+    if unreviewed and not (overrule and re_review_off):
         listed = ", ".join(unreviewed[:MAX_LISTED_PATHS]) + (" …" if len(unreviewed) > MAX_LISTED_PATHS else "")
-        return "", (
-            f"HEAD differs from what the reviewer approved ({listed}). Changes after an approval need a new "
-            "review (both steps) before remi merges."
+        remedy = (
+            'Re-review is off: the user can say "merge anyway" to merge the unreviewed fixes.'
+            if re_review_off
+            else "Changes after an approval need a new review (both steps) before remi merges."
         )
+        return "", f"HEAD differs from what the reviewer approved ({listed}). {remedy}"
     return head, ""
 
 

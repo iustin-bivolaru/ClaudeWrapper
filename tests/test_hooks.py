@@ -1618,6 +1618,16 @@ def test_merge_anyway_still_needs_the_reviewed_code(repo, tmp_path):
     assert "service.py" in result.stderr
 
 
+def test_re_review_off_merge_anyway_accepts_fixes_after_the_review(repo, tmp_path):
+    env = reviewed_change(repo, tmp_path) | {"REMI_RE_REVIEW": "off"}
+    (repo / "service.py").write_text("ANSWER = 43\n")
+    git(repo, "commit", "-qam", "fix: apply review findings")
+    assert merge(repo, env, asked="merge anyway").returncode == 0
+    refused = merge(repo, env, asked="merge it")
+    assert refused.returncode == 2
+    assert "Re-review is off" in refused.stderr
+
+
 def test_merge_anyway_still_needs_a_review(repo, tmp_path):
     result = merge(repo, review_env(tmp_path), asked="merge anyway")
     assert result.returncode == 2

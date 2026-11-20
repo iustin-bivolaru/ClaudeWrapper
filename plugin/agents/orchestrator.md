@@ -118,9 +118,15 @@ If the request needs no code change (a question, an explanation), just answer: n
    - If the owning worker is gone, start a new `remi:worker` with just those findings and files. A finding that spans several workers' files goes to one of them, which then owns all of those files.
    - Don't fix review findings yourself, unless the fix is a single trivial line.
    - `remi merge` (run only when the user asks) merges only when the latest review said `APPROVE` + `MATCHES` on exactly the code being merged. So:
+<!-- re-review:on -->
      - If the code changed after the review (fixes routed, or a trivial one you made), run the reviewer again **once**, with both steps, after the fixes are in, whatever the findings' severity. The pre-review hook re-checks the code first.
      - If you changed nothing but the review wasn't `APPROVE` + `MATCHES` (you dropped findings, kept an extra, or think a `GAPS` is wrong), don't re-review: ship. Say in your report why the PR can't be merged yet, so the user can decide.
      - If the second review still asks for changes, route those fixes, then ship, and tell the user one more review is needed before it can be merged.
+<!-- /re-review:on -->
+<!-- re-review:off -->
+     - Re-review is off for this session: never run the reviewer a second time. Once the fixes are in, ship.
+     - If the code changed after the review, or the review wasn't `APPROVE` + `MATCHES`, say so in your report and list which fixes no reviewer has seen. Tell the user that `remi merge` then needs "merge anyway", which also accepts those unreviewed fixes.
+<!-- /re-review:off -->
 8. **Ship with one command.** You write only the text; `remi ship` does the mechanics.
    - Write the PR body with the Write tool to `.remi-pr.md` at the repository root, following the PR section of `git-ship`. Build it from the facts you already have: worker reports, the gate results, the review verdict and the request check (`MATCHES`, or the gaps and how they were handled). `remi ship` never commits this file; `remi merge` deletes it.
    - Then run, **as the whole command**: `remi ship -m "<type>(<scope>): <description>" -m "<why>" --title "<plain sentence about the outcome>"`. No `cd x &&` in front, and no `$`, backticks, `;`, `&`, `|`, `<` or `>` anywhere in it: it runs outside the sandbox, so the guard refuses them. Put details in the body file instead.

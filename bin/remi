@@ -13,6 +13,7 @@
 #   REMI_REVIEWER_MODEL      (opus)    REMI_REVIEWER_EFFORT     (medium)
 #   REMI_REVIEWER_S_EFFORT   (low)     reviewer effort for size-S tasks (set per launch by the orchestrator)
 #   REMI_WORKER_MAX_TURNS    (50)      REMI_REVIEWER_MAX_TURNS  (25)
+#   REMI_RE_REVIEW           (on)      off: no second review after fixes; "merge anyway" then accepts them
 #   REMI_MAX_WORKERS         (3)       REMI_NO_BANNER           (unset)
 #   REMI_NEW_REPO            (ask)     folder without a git repo: ask | github | local | off
 #   REMI_PERMISSION_MODE     (claude's default) starting mode: manual | acceptEdits | plan | auto
@@ -96,14 +97,16 @@ fi
 : "${REMI_ORCHESTRATOR_MODEL:=opus}"  "${REMI_ORCHESTRATOR_EFFORT:=medium}"
 : "${REMI_WORKER_MODEL:=sonnet}"      "${REMI_WORKER_EFFORT:=medium}"
 : "${REMI_REVIEWER_MODEL:=opus}"      "${REMI_REVIEWER_EFFORT:=medium}"
-: "${REMI_REVIEWER_S_EFFORT:=low}"
+: "${REMI_REVIEWER_S_EFFORT:=low}"     "${REMI_RE_REVIEW:=on}"
 : "${REMI_WORKER_MAX_TURNS:=50}"      "${REMI_REVIEWER_MAX_TURNS:=25}"
 : "${REMI_MAX_WORKERS:=3}"           "${REMI_NEW_REPO:=ask}"
 case "$REMI_NEW_REPO" in ask|github|local|off) ;; *)
   echo "remi: REMI_NEW_REPO='$REMI_NEW_REPO' must be one of: ask github local off" >&2; exit 2 ;; esac
+case "$REMI_RE_REVIEW" in on|off) ;; *)
+  echo "remi: REMI_RE_REVIEW='$REMI_RE_REVIEW' must be one of: on off" >&2; exit 2 ;; esac
 export REMI_ORCHESTRATOR_MODEL REMI_ORCHESTRATOR_EFFORT REMI_WORKER_MODEL REMI_WORKER_EFFORT \
        REMI_REVIEWER_MODEL REMI_REVIEWER_EFFORT REMI_REVIEWER_S_EFFORT REMI_MAX_WORKERS \
-       REMI_WORKER_MAX_TURNS REMI_REVIEWER_MAX_TURNS
+       REMI_WORKER_MAX_TURNS REMI_REVIEWER_MAX_TURNS REMI_RE_REVIEW
 
 valid_efforts=" low medium high xhigh max "
 for effort_variable in REMI_ORCHESTRATOR_EFFORT REMI_WORKER_EFFORT REMI_REVIEWER_EFFORT REMI_REVIEWER_S_EFFORT; do
@@ -120,7 +123,7 @@ done
 # The copy is content-addressed, so concurrent sessions never overwrite each other's files.
 overlay_key="$(
   { printf '%s\n' "$REMI_WORKER_MODEL" "$REMI_WORKER_EFFORT" "$REMI_REVIEWER_MODEL" "$REMI_REVIEWER_EFFORT" \
-      "$REMI_REVIEWER_S_EFFORT" "$REMI_WORKER_MAX_TURNS" "$REMI_REVIEWER_MAX_TURNS"
+      "$REMI_REVIEWER_S_EFFORT" "$REMI_WORKER_MAX_TURNS" "$REMI_REVIEWER_MAX_TURNS" "$REMI_RE_REVIEW"
     cd "$REMI_HOME/plugin" && find . -type f -exec cksum {} + | sort -k3; } | cksum | cut -d' ' -f1
 )"
 plugin_dir="${XDG_CACHE_HOME:-$HOME/.cache}/remi/plugin-$overlay_key"
@@ -145,11 +148,15 @@ PY
   set_frontmatter "$staging_dir/agents/reviewer.md" effort "$REMI_REVIEWER_EFFORT"
   set_frontmatter "$staging_dir/agents/worker.md"   maxTurns "$REMI_WORKER_MAX_TURNS"
   set_frontmatter "$staging_dir/agents/reviewer.md" maxTurns "$REMI_REVIEWER_MAX_TURNS"
-  python3 - "$staging_dir/agents/orchestrator.md" "$REMI_REVIEWER_S_EFFORT" <<'PY'
-import sys
+  python3 - "$staging_dir/agents/orchestrator.md" "$REMI_REVIEWER_S_EFFORT" "$REMI_RE_REVIEW" <<'PY'
+import re, sys
 from pathlib import Path
-orchestrator_path = Path(sys.argv[1])
-orchestrator_path.write_text(orchestrator_path.read_text().replace("{{REMI_REVIEWER_S_EFFORT}}", sys.argv[2]))
+orchestrator_path, s_effort, re_review = Path(sys.argv[1]), sys.argv[2], sys.argv[3]
+text = orchestrator_path.read_text().replace("{{REMI_REVIEWER_S_EFFORT}}", s_effort)
+dropped = "off" if re_review == "on" else "on"
+text = re.sub(rf"<!-- re-review:{dropped} -->\n.*?<!-- /re-review:{dropped} -->\n", "", text, flags=re.S)
+text = re.sub(r"<!-- /?re-review:(on|off) -->\n", "", text)
+orchestrator_path.write_text(text)
 PY
   mv "$staging_dir" "$plugin_dir" 2>/dev/null || rm -rf "$staging_dir"   # another session won the race
 fi
@@ -308,7 +315,7 @@ if [ -t 1 ] && [ "$is_print_mode" = false ] && [ -z "${REMI_NO_BANNER:-}" ]; the
   command -v pyright-langserver >/dev/null || pyright_hint=" · pyright missing: uv tool install pyright"
   cat <<BANNER
  ▗█▖ ▗█▖   remi
- ▟▀███▀▙   orchestrator ${orchestrator_model}/${orchestrator_effort} · workers ${REMI_WORKER_MODEL}/${REMI_WORKER_EFFORT} 1–${REMI_MAX_WORKERS} by size · reviewer ${REMI_REVIEWER_MODEL}/${REMI_REVIEWER_EFFORT} (S: ${REMI_REVIEWER_S_EFFORT})
+ ▟▀███▀▙   orchestrator ${orchestrator_model}/${orchestrator_effort} · workers ${REMI_WORKER_MODEL}/${REMI_WORKER_EFFORT} 1–${REMI_MAX_WORKERS} by size · reviewer ${REMI_REVIEWER_MODEL}/${REMI_REVIEWER_EFFORT} (S: ${REMI_REVIEWER_S_EFFORT}, re-review ${REMI_RE_REVIEW})
  ▜█████▛   sandbox on · secrets guarded · branch ${branch}${pyright_hint}
   ▘▘ ▝▝    ${start_mode:+mode ${start_mode} · }shift+tab cycles modes (plan · accept edits · default)
 BANNER
