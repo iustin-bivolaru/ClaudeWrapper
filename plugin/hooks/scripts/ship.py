@@ -226,9 +226,9 @@ def main(arguments: list[str]) -> int:
     report = [f"branch {branch}", commit(root, payload, options.message, options.body_file)]
     number, url = open_pull_request(root, branch, options)
     report.append(f"PR #{number}: {url}")
-    if options.body_file == root / DEFAULT_BODY_FILE:
-        options.body_file.unlink(missing_ok=True)
     report.append(merge(root, payload, number))
+    if report[-1].startswith("merged") and options.body_file == root / DEFAULT_BODY_FILE:
+        options.body_file.unlink(missing_ok=True)  # kept while the PR is open, for the next ship
     print("\n".join(f"[remi ship] {line}" for line in report))
     return 0
 

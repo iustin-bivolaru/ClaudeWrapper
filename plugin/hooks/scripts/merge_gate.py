@@ -4,6 +4,8 @@
   code review's ``VERDICT`` is stored with a snapshot (path -> git blob id) of every
   non-ignored file the reviewer saw; the request check's ``REQUEST`` is stored next
   to it. A new reviewer starts a fresh record.
+* ``record_handback`` - called on UserPromptSubmit: the same report reaches the main
+  session as a hand-back prompt, which catches a request check that SubagentStop missed.
 * PreToolUse on Bash - ``gh pr merge`` is allowed only when the latest reviewer said
   ``VERDICT: APPROVE`` and ``REQUEST: MATCHES``, every file in HEAD is exactly what it
   reviewed, and the merge is pinned to HEAD with ``--match-head-commit``. A file
@@ -29,6 +31,7 @@ REVIEW_STATE_FILE = "review-state.json"
 VERDICT_PATTERN = re.compile(r"VERDICT:\s*(APPROVE|CHANGES_REQUESTED)")
 REQUEST_PATTERN = re.compile(r"REQUEST:\s*(MATCHES|GAPS)")
 HANDBACK_TOOL = "SubagentHandback"
+HANDBACK_SENDER = re.compile(r'\A(?:Another Claude session sent a message:\s*)?<agent-message from="([\w-]+)"')
 MERGE_COMMAND = re.compile(r"\bgh\s+pr\s+merge\b")
 MAX_LISTED_PATHS = 5
 BASE_REFS = ("origin/HEAD", "origin/main", "origin/master", "main", "master")
@@ -204,13 +207,40 @@ def record_review(payload: dict[str, Any]) -> None:
     Args:
         payload: SubagentStop payload for a reviewer.
     """
-    reviewer = _slot_name(payload)
-    message = _last_message(payload)
+    _record(payload, _slot_name(payload), _last_message(payload), refresh_snapshot=True)
+
+
+def record_handback(payload: dict[str, Any]) -> None:
+    """Store the verdict or request result from a reviewer's hand-back to the main session.
+
+    A reviewer resumed by SendMessage can stop before its last ``SubagentHandback`` reaches
+    its transcript, so SubagentStop may miss the request check. The same report also reaches
+    the main session as a prompt (``<agent-message from="<id>">``); it counts only for the
+    latest reviewer, and it never replaces a verdict's snapshot that the stop already took.
+
+    Args:
+        payload: UserPromptSubmit payload.
+    """
+    sender = HANDBACK_SENDER.match(str(payload.get("prompt") or ""))
+    if not sender or sender.group(1) != latest_reviewer(payload):
+        return
+    _record(payload, sender.group(1), str(payload.get("prompt")), refresh_snapshot=False)
+
+
+def _record(payload: dict[str, Any], reviewer: str, message: str, *, refresh_snapshot: bool) -> None:
+    """Store the verdict and request result found in one reviewer report.
+
+    Args:
+        payload: Hook payload (scopes state and finds the repository).
+        reviewer: The reviewer's agent id.
+        message: The report text.
+        refresh_snapshot: Retake the snapshot even when this reviewer's verdict is already recorded.
+    """
     state = _load_state(payload)
     if state.get("reviewer") != reviewer:
         state = {"reviewer": reviewer}
     verdict = VERDICT_PATTERN.search(message)
-    if verdict:
+    if verdict and (refresh_snapshot or "verdict" not in state):
         state["verdict"] = verdict.group(1)
         try:
             state["snapshot"], state["tracked"] = working_tree_snapshot(project_dir(payload))
