@@ -12,6 +12,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Any, NoReturn
 
@@ -182,3 +183,73 @@ def record_edit(payload: dict[str, Any]) -> None:
         return
     with edits_log(payload).open("a", encoding="utf-8") as log_file:
         log_file.write(f"{Path(file_path).resolve()}\n")
+
+
+def _bash_start_marker(payload: dict[str, Any]) -> Path | None:
+    """Return the file that holds a Bash call's start time.
+
+    Args:
+        payload: PreToolUse or PostToolUse payload for Bash.
+
+    Returns:
+        The marker path, or None when the payload has no ``tool_use_id``.
+    """
+    tool_use_id = re.sub(r"[^\w-]", "_", str(payload.get("tool_use_id") or ""))
+    if not tool_use_id:
+        return None
+    markers_directory = state_dir(payload) / "bash-starts"
+    markers_directory.mkdir(exist_ok=True)
+    return markers_directory / tool_use_id
+
+
+def record_bash_start(payload: dict[str, Any]) -> None:
+    """Note when an allowed Bash call starts, so its Python edits can be found afterwards.
+
+    Args:
+        payload: PreToolUse payload for Bash.
+    """
+    marker = _bash_start_marker(payload)
+    if marker is not None:
+        marker.write_text(repr(time.time()))
+
+
+def record_bash_edits(payload: dict[str, Any]) -> None:
+    """Record the Python files a finished Bash call wrote (heredocs, scripts, sed -i).
+
+    Agents often write files through Bash instead of Write/Edit. Changed or new ``.py``
+    files whose modification time is after the call started go into the agent's edit log,
+    like a Write/Edit would.
+
+    Args:
+        payload: PostToolUse payload for Bash.
+    """
+    marker = _bash_start_marker(payload)
+    if marker is None or not marker.is_file():
+        return
+    try:
+        started = float(marker.read_text())
+    except ValueError:
+        return
+    finally:
+        marker.unlink(missing_ok=True)
+    root = project_dir(payload)
+    names: set[str] = set()
+    for arguments in (["diff", "--name-only", "HEAD"], ["ls-files", "--others", "--exclude-standard"]):
+        try:
+            result = subprocess.run(
+                ["git", *arguments], cwd=root, capture_output=True, text=True, timeout=30, check=False
+            )
+        except (OSError, subprocess.SubprocessError):
+            return
+        names.update(line.strip() for line in result.stdout.splitlines() if line.strip().endswith(".py"))
+    written = []
+    for name in sorted(names):
+        file_path = root / name
+        try:
+            if file_path.stat().st_mtime >= started:
+                written.append(file_path.resolve())
+        except OSError:
+            continue
+    if written:
+        with edits_log(payload).open("a", encoding="utf-8") as log_file:
+            log_file.writelines(f"{file_path}\n" for file_path in written)

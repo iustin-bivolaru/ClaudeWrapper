@@ -12,6 +12,8 @@ Events:
                        policy and pre-review gate (Agent), the reviewer message check
                        (SendMessage). Write/Edit of a ``.py`` file is recorded for
                        the end-of-turn gates; nothing is linted per edit.
+* ``post-tool``      - PostToolUse on Bash: record the ``.py`` files the call wrote
+                       (agents often write files with heredocs or scripts, not Write/Edit).
 * ``subagent-start`` - SubagentStart: turn a worker's reservation into a slot.
 * ``subagent-stop``  - SubagentStop: the worker gate, or record a reviewer's verdict.
 * ``stop``           - Stop: the main session's end-of-turn gate, only if it edited Python.
@@ -29,7 +31,7 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from _common import ALLOW, BLOCK, block, read_payload, record_edit  # noqa: E402
+from _common import ALLOW, BLOCK, block, read_payload, record_bash_edits, record_bash_start, record_edit  # noqa: E402
 
 FILE_WRITE_TOOLS = frozenset({"Write", "Edit", "MultiEdit"})
 
@@ -67,7 +69,23 @@ def pre_tool(payload: dict[str, Any]) -> int:
         import merge_gate
         import quality
 
-        return quality.on_commit(payload) or merge_gate.check_merge(payload)
+        result = quality.on_commit(payload) or merge_gate.check_merge(payload)
+        if result == ALLOW:
+            record_bash_start(payload)
+        return result
+    return ALLOW
+
+
+def post_tool(payload: dict[str, Any]) -> int:
+    """Record the Python files a finished Bash call wrote, for the worker and end-of-turn gates.
+
+    Args:
+        payload: PostToolUse payload for Bash.
+
+    Returns:
+        Always 0.
+    """
+    record_bash_edits(payload)
     return ALLOW
 
 
@@ -131,6 +149,7 @@ def prompt(payload: dict[str, Any]) -> int:
 
 EVENTS = {
     "pre-tool": pre_tool,
+    "post-tool": post_tool,
     "subagent-start": subagent_start,
     "subagent-stop": subagent_stop,
     "stop": stop,
